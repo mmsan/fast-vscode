@@ -1,0 +1,44 @@
+{
+	"$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+	"name": "shortcut",
+	"patterns": [
+		{
+			"include": "#keywords"
+		},
+    {
+			"include": "#comment"
+		},
+		{
+			"include": "#strings"
+		}
+	],
+	"repository": {
+		"keywords": {
+			"patterns": [{
+				"name": "keyword.control.scs",
+				"match": "\\/\\/\\/.*"
+			}]
+		},
+    "comment": {
+			"begin": "// ",
+			"end": "\\n",
+			"name": "comment.line.double-slash"
+		},
+		"strings": {
+			"name": "string.quoted.double.scs",
+			"begin": "^(\"|`)",
+			"end": "(\"|`)$",
+			"patterns": [
+				{
+					"name": "constant.character.escape.scs",
+					"match": "^(\"|`).*(\"|`)$"
+				}
+			]
+		}
+	},
+	"scopeName": "shortcut"
+}
+
+
+
+
