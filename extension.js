@@ -20,9 +20,11 @@ function activate(context) {
       for (var i = 0; i < selections.length; i++) {
         var range = selections[i]
         var text = vscode.window.activeTextEditor.document.getText(range).toString()
+        text = _.replace(text, /\n\s*\n/g, '\n')
+        text = _.replace(text, /\n(\/\/\s*-{10,}.*)/g, '\n\n$1')
         text = _.replace(text, /[\n\r]{3,}(?=\/\/\/)/g, '')
-        text = _.replace(text, /(?<!^)\s*\/\/\//g, '\n\n\n\/\/\/')
-        
+        text = _.replace(text, /(?<!^)\s*\/\/\//g, '\n\n\/\/\/')
+
         builder.replace(range, text)
       }
     })
@@ -39,3 +41,4 @@ function deactivate() {
 }
 
 exports.deactivate = deactivate
+
