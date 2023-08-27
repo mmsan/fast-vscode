@@ -2,7 +2,7 @@
   "name": "scs",
   "displayName": "scs",
   "description": "shortcut",
-  "version": "0.0.11",
+  "version": "0.0.14",
   "license": "MIT",
   "engines": {
     "vscode": "^1.58.0"
@@ -12,6 +12,7 @@
     "Programming Languages",
     "Formatters"
   ],
+  "icon": "icon.png",
   "activationEvents": [
     "onLanguage:scs",
     "onCommand:extension.beautifyScs"

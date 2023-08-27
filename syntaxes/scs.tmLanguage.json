@@ -22,6 +22,10 @@
         {
           "name": "keyword.control.scs",
           "match": "\\(\\d+\\)"
+        },
+        {
+          "name": "keyword.control.scs",
+          "match": "((?<=\\{)[\\d&|!()]*\\?(?=.+?})|<>)"
         }
       ]
     },
@@ -36,10 +40,10 @@
       "end": "(\"|`|')$",
       "patterns": [
         {
-          "name": "constant.character.escape.scs",
-          "match": "^(\"|`|').*\\1$"
+          "name": "keyword.control.scs",
+          "match": "((?<=\\{)[\\d&|!()]*\\?(?=.+?})|<>)"
         }
-      ]
+      ]   
     }
   },
   "scopeName": "shortcut"
