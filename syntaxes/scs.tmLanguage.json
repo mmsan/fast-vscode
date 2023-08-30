@@ -25,15 +25,16 @@
         },
         {
           "name": "keyword.control.scs",
-          "match": "((?<=\\{)[\\d&|!()]*\\?(?=.+?})|<>)"
+          "match": "((?<=\\{)[\\d&|!()]*\\?(?=.+?})|<>|\\{\/?d2?\\})"
         }
+        
       ]
     },
     "comment": {
       "begin": "// ",
       "end": "\\n",
       "name": "comment.line.double-slash"
-    },
+    },  
     "strings": {
       "name": "string.quoted.double.scs",
       "begin": "^(\"|`|')",
@@ -41,7 +42,7 @@
       "patterns": [
         {
           "name": "keyword.control.scs",
-          "match": "((?<=\\{)[\\d&|!()]*\\?(?=.+?})|<>)"
+          "match": "((?<=\\{)[\\d&|!()]*\\?(?=.+?})|<>|\\{\/?d2?\\})"
         }
       ]   
     }
