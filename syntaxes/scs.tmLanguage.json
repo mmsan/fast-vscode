@@ -38,7 +38,7 @@
     "strings": {
       "name": "string.quoted.double.scs",
       "begin": "(\"|`|')",
-      "end": "(\"|`|')",
+      "end": "\\1",
       "patterns": [
         {
           "name": "keyword.control.scs",
