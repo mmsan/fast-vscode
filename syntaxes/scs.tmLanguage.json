@@ -6,6 +6,9 @@
       "include": "#keywords"
     },
     {
+			"include": "#statements"
+		},
+    {
       "include": "#comment"
     },
     {
@@ -25,7 +28,7 @@
         },
         {
           "name": "keyword.control.scs",
-          "match": "((?<=\\{)[\\d&|!()]*\\?(?=(.+?}|\\s*\\n))|<>|\\{\/?d2?\\})"
+          "match": "((?<=\\{)([\\d&|!()]*\\?|!)(?=(.+?}|\\s*\\n))|<>|\\{\/?d2?\\})"
         }
         
       ]
@@ -35,6 +38,8 @@
       "end": "\\n",
       "name": "comment.line.double-slash"
     },  
+
+
     "strings": {
       "name": "string.quoted.double.scs",
       "begin": "(\"|`|')",
@@ -42,7 +47,7 @@
       "patterns": [
         {
           "name": "keyword.control.scs",
-          "match": "((?<=\\{)[\\d&|!()]*\\?(?=(.+?}|\\s*\\n))|<>|\\{\/?d2?\\})"
+          "match": "((?<=\\{)([\\d&|!()]*\\?|!)(?=(.+?}|\\s*\\n))|<>|\\{\/?d2?\\})"
         }
       ]   
     }
