@@ -2,10 +2,10 @@
   "name": "scs",
   "displayName": "scs",
   "description": "shortcut",
-  "version": "0.0.24",
+  "version": "0.0.25",
   "license": "MIT",
   "engines": {
-    "vscode": "^1.58.0"
+    "vscode": "^1.70.0"
   },
   "publisher": "mmsan",
   "categories": [
@@ -58,7 +58,9 @@
     "lodash": "^4.17.21"
   },
   "devDependencies": {
-    "vscode": "^0.11.0"
+    "vscode": "^1.70.0"
   }
 }
+
+
 

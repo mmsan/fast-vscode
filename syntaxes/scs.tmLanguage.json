@@ -17,7 +17,8 @@
   ],
   "repository": {
     "keywords": {
-      "patterns": [
+      "patterns":
+       [
         {
           "name": "keyword.control.scs",
           "match": "\\/\\/\\/.*"
@@ -30,11 +31,10 @@
           "name": "keyword.control.scs",
           "match": "((?<=\\{)([\\d&|!()]*\\?|!)(?=(.+?}|\\s*\\n))|<>|\\{\/?d2?\\})"
         }
-        
       ]
     },
     "comment": {
-      "begin": "// ",
+      "begin": "//(?=( |\\n))",
       "end": "\\n",
       "name": "comment.line.double-slash"
     },  

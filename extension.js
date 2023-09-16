@@ -47,8 +47,51 @@ function indent(text) {
   return text
 }
 
+function replaceBigBrace(text){
+  let has = false
+  text = _.replace(text, /\{.*?\}/g, v => {
+    has = true
+    let [r,has_] = replaceBigBrace(v.substring(1))
+
+    if(has_) {
+      return v[0]+r
+    }
+
+    return `__big_left__${v.substring(1, _.size(v)-1)}__big_right__`
+  })
+
+
+  if(has) {
+    text=replaceBigBrace(text)[0]
+  }
+
+  return [text, has]
+}
+
 
 function handleIndent(text) {
+  text = _.replace(text, /.*[}]+ *\r?\n/g, v => {
+    v = replaceBigBrace(v)[0]
+    v = _.trimEnd(v)
+    v = _.replace(v, /.*}+$/g, v => {
+      if(/\S/g.test(_.replace(v, /}+$/g, ''))) {
+        v = _.replace(v, /}+$/g, v => {
+          return '\n'+_.join(v, '\n')
+        })
+      } else {
+        v = _.replace(v, /}+$/g, v => {
+          if(_.size(v)>1) {
+            return _.join(v, '\n')
+          }
+          return v
+        })
+      }
+      return v
+    })
+    v = _.replace(v, /__big_left__/g, '{')
+    v = _.replace(v, /__big_right__/g, '}')
+    return v+'\n'
+  })
   text = indentBefore(text)
   return indent(text)
 }
@@ -72,11 +115,11 @@ function activate(context) {
       for (var i = 0; i < selections.length; i++) {
         var range = selections[i]
         var text = vscode.window.activeTextEditor.document.getText(range).toString()
+        text = handleIndent(text)
         text = _.replace(text, /\n\s*\n/g, '\n')
         text = _.replace(text, /\n(\/\/\s*-{10,}.*)/g, '\n\n$1')
         text = _.replace(text, /[\n\r]{3,}(?=\/\/\/)/g, '')
         text = _.replace(text, /(?<!^)\s*\/\/\//g, '\n\n\/\/\/')
-        text = handleIndent(text)
         builder.replace(range, text)
       }
     })
