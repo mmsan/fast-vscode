@@ -110,7 +110,6 @@ function activate(context) {
     if (selections.length === 0) {
       selections.push(new vscode.Range(vscode.window.activeTextEditor.document.positionAt(0), vscode.window.activeTextEditor.document.positionAt(vscode.window.activeTextEditor.document.getText().length)))
     }
-
     vscode.window.activeTextEditor.edit(function (builder) {
       for (var i = 0; i < selections.length; i++) {
         var range = selections[i]
@@ -126,12 +125,12 @@ function activate(context) {
           v = handleIndent(v)
           v = _.replace(v, /\n\s*\n/g, '\n')
           v = _.replace(v, /\n(\/\/\s*-{10,}.*)/g, '\n\n$1')
-      
-          return (isStart ? '' : '\n')+v+'\n'
+
+          let isEmpty = !_.includes(_.trimEnd(v), '\n')
+          return (isStart ? '' : '\n') + v + (isEmpty ? '' : '\n')
         })
         builder.replace(range, text)
       }
-
     })
   })
 

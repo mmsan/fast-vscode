@@ -2,7 +2,7 @@
   "name": "scs",
   "displayName": "scs",
   "description": "shortcut",
-  "version": "0.0.26",
+  "version": "0.0.28",
   "license": "MIT",
   "engines": {
     "vscode": "^1.70.0"
