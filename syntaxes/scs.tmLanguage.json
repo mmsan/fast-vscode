@@ -12,20 +12,32 @@
       "include": "#comment"
     },
     {
+      "include": "#label"
+    },
+    {
       "include": "#strings"
     }
   ],
   "repository": {
+    "label": {
+      "patterns":
+       [
+        {
+          "name": "label.control.scs",
+          "match": "^\\s*\\/\\/\\/.*"
+        }
+      ]
+    },
     "keywords": {
       "patterns":
        [
         {
           "name": "keyword.control.scs",
-          "match": "\\/\\/\\/.*"
+          "match": "\\(\\d+\\)"
         },
         {
           "name": "keyword.control.scs",
-          "match": "\\(\\d+\\)"
+          "match": "^\\s*=\\s*.*"
         },
         {
           "name": "keyword.control.scs",
@@ -34,7 +46,7 @@
       ]
     },
     "comment": {
-      "begin": "//(?=( |\\n))",
+      "begin": "^\\s*//(?=( |\\n))",
       "end": "\\n",
       "name": "comment.line.double-slash"
     },  

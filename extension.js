@@ -100,7 +100,7 @@ function handleIndent(text) {
 function activate(context) {
   var disposable = vscode.commands.registerCommand('extension.beautifyScs', function () {
     var selections = []
-
+    let a=1
     for (var i = 0; i < vscode.window.activeTextEditor.selections.length; i++) {
       var s = vscode.window.activeTextEditor.selections[i]
       if (!s.start.isEqual(s.end))
