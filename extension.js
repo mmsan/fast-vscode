@@ -117,7 +117,7 @@ function activate(context) {
         // text = handleIndent(text)
         // text = _.replace(text, /\n\s*\n/g, '\n')
         // text = _.replace(text, /\n(\/\/\s*-{10,}.*)/g, '\n\n$1')
-        // text = _.replace(text, /[\n\r]{3,}(?=\/\/\/)/g, '')
+        // text = _.replace(text, /[\n\r]{3,}(?=\/\/\/)/g, ''
         // text = _.replace(text, /(?<!^)\s*\/\/\//g, '\n\n\/\/\/')
         text = _.replace(text, /(\r?\n|^)\s*\/\/\/\s*[\s\S]+?(?=(\r?\n\s*\/\/\/|$))/g, v => {
           let isStart = !/^\r?\n/g.test(v)
@@ -125,7 +125,6 @@ function activate(context) {
           v = handleIndent(v)
           v = _.replace(v, /\n\s*\n/g, '\n')
           v = _.replace(v, /\n(\/\/\s*-{10,}.*)/g, '\n\n$1')
-
           let isEmpty = !_.includes(_.trimEnd(v), '\n')
           return (isStart ? '' : '\n') + v + (isEmpty ? '' : '\n')
         })
