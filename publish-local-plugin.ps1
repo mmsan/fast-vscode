@@ -26,7 +26,7 @@ try {
         & $npm.Source version patch --no-git-tag-version
         if ($LASTEXITCODE -ne 0) { throw "npm version failed with exit code $LASTEXITCODE." }
         $versionChanged = $true
-        $version = [string]((Get-Content -Raw -LiteralPath $packagePath | ConvertFrom-Json).version)
+        $version = [string](([IO.File]::ReadAllText($packagePath) | ConvertFrom-Json).version)
     }
 
     $npm = Get-Command 'npm.cmd' -ErrorAction Stop

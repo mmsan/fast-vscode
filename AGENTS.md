@@ -34,6 +34,8 @@ Caret means the text insertion caret, not the mouse pointer. Do not add mouse-po
 
 When changing handshake fields, event names, commands, or payloads, inspect `D:\v\fast\utils\vscode-socket.js` and `D:\v\fast\utils\socket-browser.js`, and keep the Node.js routing backward compatible. Validate all three JavaScript files with `node --check`.
 
+`D:\v\fast\fast.js` copies the active VS Code bridge file and workspace root onto `f.fast.currentWindow.filePath` and `f.fast.currentWindow.dir`. Preserve this binding when changing current-editor lookup behavior.
+
 ## Local publishing
 
 For a normal local release, run:

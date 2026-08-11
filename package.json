@@ -1,8 +1,8 @@
 {
   "name": "scs",
-  "displayName": "scs",
+  "displayName": "fast-bridge",
   "description": "shortcut",
-  "version": "0.0.33",
+  "version": "0.0.35",
   "license": "MIT",
   "engines": {
     "vscode": "^1.70.0"
@@ -40,13 +40,45 @@
     "configuration": {
       "title": "Fast Bridge",
       "properties": {
-        "fastBridge.host": { "type": "string", "default": "127.0.0.1", "description": "Fast WebSocket 服务地址。" },
-        "fastBridge.port": { "type": "number", "default": 19900, "minimum": 1, "maximum": 65535, "description": "Fast WebSocket 服务端口。" },
-        "fastBridge.path": { "type": "string", "default": "", "description": "WebSocket 路径。" },
-        "fastBridge.token": { "type": "string", "default": "", "description": "可选 Bearer Token。" },
-        "fastBridge.autoConnect": { "type": "boolean", "default": true, "description": "启动后自动连接，并在断线后重连。" },
-        "fastBridge.sendText": { "type": "boolean", "default": true, "description": "发送选中文本和输入光标附近文本。" },
-        "fastBridge.contextCharacters": { "type": "number", "default": 200, "minimum": 0, "maximum": 10000, "description": "输入光标前后发送的最大字符数。" }
+        "fastBridge.host": {
+          "type": "string",
+          "default": "127.0.0.1",
+          "description": "Fast WebSocket 服务地址。"
+        },
+        "fastBridge.port": {
+          "type": "number",
+          "default": 19900,
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Fast WebSocket 服务端口。"
+        },
+        "fastBridge.path": {
+          "type": "string",
+          "default": "",
+          "description": "WebSocket 路径。"
+        },
+        "fastBridge.token": {
+          "type": "string",
+          "default": "",
+          "description": "可选 Bearer Token。"
+        },
+        "fastBridge.autoConnect": {
+          "type": "boolean",
+          "default": true,
+          "description": "启动后自动连接，并在断线后重连。"
+        },
+        "fastBridge.sendText": {
+          "type": "boolean",
+          "default": true,
+          "description": "发送选中文本和输入光标附近文本。"
+        },
+        "fastBridge.contextCharacters": {
+          "type": "number",
+          "default": 200,
+          "minimum": 0,
+          "maximum": 10000,
+          "description": "输入光标前后发送的最大字符数。"
+        }
       }
     },
     "keybindings": [
@@ -85,4 +117,3 @@
     "@types/vscode": "^1.70.0"
   }
 }
-
