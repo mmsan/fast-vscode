@@ -1,4 +1,14 @@
+.git/**
+.github/**
+.idea/**
 .vscode/**
 .vscode-test/**
+.npm-cache/**
 .gitignore
+*.bat
+*.ps1
+publish-local-plugin.cmd
+AGENTS.md
+*.stackdump
+scs-*.vsix
 vsc-extension-quickstart.md

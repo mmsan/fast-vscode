@@ -2,6 +2,7 @@
 // Import the module and reference it with the alias vscode in your code below
 var vscode = require('vscode')
 const _ = require('lodash')
+const { FastBridge } = require('./fastBridge')
 
 
 function indentBefore(text, deep = 0, isWhile = true) {
@@ -97,7 +98,9 @@ function handleIndent(text) {
 }
 
 
-function activate(context) {
+async function activate(context) {
+  const bridge = new FastBridge(context)
+  await bridge.start()
   var disposable = vscode.commands.registerCommand('extension.beautifyScs', function () {
     var selections = []
     let a=1
@@ -142,4 +145,3 @@ function deactivate() {
 }
 
 exports.deactivate = deactivate
-

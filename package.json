@@ -14,8 +14,11 @@
   ],
   "icon": "icon.png",
   "activationEvents": [
+    "onStartupFinished",
     "onLanguage:scs",
-    "onCommand:extension.beautifyScs"
+    "onCommand:extension.beautifyScs",
+    "onCommand:fastBridge.reconnect",
+    "onCommand:fastBridge.showOutput"
   ],
   "main": "./extension",
   "repository": {},
@@ -24,8 +27,28 @@
       {
         "command": "extension.beautifyScs",
         "title": "Beautify SQL"
+      },
+      {
+        "command": "fastBridge.reconnect",
+        "title": "Fast Bridge: 重新连接"
+      },
+      {
+        "command": "fastBridge.showOutput",
+        "title": "Fast Bridge: 显示日志"
       }
     ],
+    "configuration": {
+      "title": "Fast Bridge",
+      "properties": {
+        "fastBridge.host": { "type": "string", "default": "127.0.0.1", "description": "Fast WebSocket 服务地址。" },
+        "fastBridge.port": { "type": "number", "default": 19900, "minimum": 1, "maximum": 65535, "description": "Fast WebSocket 服务端口。" },
+        "fastBridge.path": { "type": "string", "default": "", "description": "WebSocket 路径。" },
+        "fastBridge.token": { "type": "string", "default": "", "description": "可选 Bearer Token。" },
+        "fastBridge.autoConnect": { "type": "boolean", "default": true, "description": "启动后自动连接，并在断线后重连。" },
+        "fastBridge.sendText": { "type": "boolean", "default": true, "description": "发送选中文本和输入光标附近文本。" },
+        "fastBridge.contextCharacters": { "type": "number", "default": 200, "minimum": 0, "maximum": 10000, "description": "输入光标前后发送的最大字符数。" }
+      }
+    },
     "keybindings": [
       {
         "command": "extension.beautifyScs",
@@ -55,12 +78,11 @@
     ]
   },
   "dependencies": {
-    "lodash": "^4.17.21"
+    "lodash": "^4.17.21",
+    "ws": "^8.18.3"
   },
   "devDependencies": {
-    "vscode": "^1.70.0"
+    "@types/vscode": "^1.70.0"
   }
 }
-
-
 
