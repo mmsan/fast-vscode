@@ -21,6 +21,8 @@ class FastBridge {
     this.sequence = 0
     this.generation = 0
     this.reconnectAttempt = 0
+    this.editorOpenedKey = null
+    this.editorOpenedAt = 0
     this.output = vscode.window.createOutputChannel('Fast Bridge')
   }
 
@@ -30,12 +32,15 @@ class FastBridge {
     this.context.subscriptions.push(
       this.output,
       vscode.window.onDidChangeActiveTextEditor(() => this.schedule('focus.changed', 0)),
+      vscode.window.tabGroups.onDidChangeTabs(() => this.schedule('focus.changed', 0)),
+      vscode.window.tabGroups.onDidChangeTabGroups(() => this.schedule('focus.changed', 0)),
       vscode.window.onDidChangeTextEditorSelection(() => this.schedule('editor.caretChanged', 40)),
       vscode.workspace.onDidChangeTextDocument(() => this.schedule('editor.documentChanged', 100)),
       vscode.workspace.onDidChangeWorkspaceFolders(() => this.reconnect()),
       vscode.workspace.onDidChangeConfiguration(event => event.affectsConfiguration('fastBridge') && this.reconnect()),
       vscode.commands.registerCommand('fastBridge.reconnect', () => this.reconnect()),
       vscode.commands.registerCommand('fastBridge.showOutput', () => this.output.show()),
+      vscode.commands.registerCommand('fastBridge.copySelectedResourcePath', () => this.copyResourcePath(true)),
       { dispose: () => this.dispose() },
     )
     if (this.settings().autoConnect) this.connect()
@@ -83,13 +88,13 @@ class FastBridge {
       this.log(`连接配置无效：${error.message}`)
       return
     }
-    socket.on('open', () => {
+    socket.on('open', async () => {
       if (generation !== this.generation || this.disposed) return socket.close()
       this.socket = socket
       this.connectionId = uuid()
       this.reconnectAttempt = 0
       this.log('已连接')
-      this.send('bridge.hello', this.identity())
+      this.send('bridge.hello', await this.identity())
       this.schedule('editor.state', 0)
     })
     socket.on('message', data => {
@@ -105,7 +110,8 @@ class FastBridge {
     })
   }
 
-  identity() {
+  async identity() {
+    const snapshot = await this.snapshot()
     return {
       client: 'fast-vscode-bridge',
       clientId: this.installationId,
@@ -118,7 +124,10 @@ class FastBridge {
       projects: this.projects(),
       processId: process.pid,
       nativeWindows: { supported: false, windows: [] },
-      capabilities: ['state', 'navigate', 'select', 'find', 'requestFocus', 'listProjects'],
+      fullScreen: snapshot.fullScreen,
+      editorOpenedAt: snapshot.editorOpenedAt,
+      activeProject: snapshot.activeEditor?.project || null,
+      capabilities: ['state', 'navigate', 'select', 'find', 'requestFocus', 'fullScreen', 'listProjects', 'copyResourcePath'],
     }
   }
 
@@ -151,14 +160,98 @@ class FastBridge {
 
   schedule(type, delay) {
     clearTimeout(this.pending)
-    this.pending = setTimeout(() => this.send(type, this.snapshot()), delay)
+    this.pending = setTimeout(async () => {
+      try {
+        this.send(type, await this.snapshot())
+      } catch (error) {
+        this.log(`读取当前资源失败：${error.message}`)
+      }
+    }, delay)
   }
 
-  snapshot() {
+  async snapshot() {
     const editor = vscode.window.activeTextEditor
+    const resource = editor ? editor.document.uri : await this.activeResourceUri()
+    const editorOpenedAt = this.getEditorOpenedAt(editor, resource)
+    const resourceFolder = resource ? vscode.workspace.getWorkspaceFolder(resource) : null
+    const activeResource = resource && resource.scheme === 'file'
+      ? {
+        path: resource.fsPath,
+        url: resource.toString(),
+        name: path.basename(resource.fsPath),
+        ...(resourceFolder
+          ? { project: { projectId: projectId(resourceFolder.uri.fsPath), name: resourceFolder.name, basePath: resourceFolder.uri.fsPath } }
+          : {}),
+      }
+      : null
+    const fullScreen = await this.contextKeyValue('isFullscreen')
     return {
-      focus: editor ? { type: 'editor', className: 'vscode.TextEditor', enabled: true, visible: true, showing: true } : { type: 'none' },
-      activeEditor: editor ? this.describe(editor) : null,
+      focus: editor
+        ? { type: 'editor', className: 'vscode.TextEditor', enabled: true, visible: true, showing: true }
+        : resource
+          ? { type: 'editor', className: 'vscode.ResourceEditor', enabled: true, visible: true, showing: true }
+          : { type: 'none' },
+      activeEditor: editor ? this.describe(editor) : resource ? this.describeResource(resource) : null,
+      activeResource,
+      editorOpenedAt,
+      // An unavailable context key is unknown, not "not fullscreen". Treating
+      // it as false would make the toggle command shrink the window.
+      fullScreen: fullScreen === undefined ? null : fullScreen === true || fullScreen === 'true',
+    }
+  }
+
+  getEditorOpenedAt(editor, resource) {
+    const key = editor || (resource ? resource.toString() : null)
+    if (!key) return 0
+    if (key !== this.editorOpenedKey) {
+      this.editorOpenedKey = key
+      this.editorOpenedAt = Date.now()
+    }
+    return this.editorOpenedAt
+  }
+
+  async activeResourceUri() {
+    const tab = vscode.window.tabGroups?.activeTabGroup?.activeTab
+    const uri = tab?.input?.uri
+    if (uri && typeof uri.fsPath === 'string') return uri
+    const value = await this.contextKeyValue('resource')
+    if (typeof value !== 'string' || !/^file:/i.test(value)) return null
+    try {
+      return vscode.Uri.parse(value)
+    } catch (error) {
+      return null
+    }
+  }
+
+  describeResource(uri) {
+    const folder = vscode.workspace.getWorkspaceFolder(uri)
+    const filePath = uri.scheme === 'file' ? uri.fsPath : ''
+    const name = path.basename(filePath || uri.path || uri.toString())
+    return {
+      ownsFocus: true,
+      editable: false,
+      file: {
+        name,
+        path: filePath,
+        url: uri.toString(),
+        writable: false,
+        fileType: path.extname(name).replace(/^\./, ''),
+        projectRelativePath: folder && filePath
+          ? path.relative(folder.uri.fsPath, filePath).replace(/\\/g, '/')
+          : undefined,
+      },
+      caret: {
+        offset: 0,
+        line: 0,
+        column: 0,
+        lineNumber: 1,
+        columnNumber: 1,
+        visualLine: 0,
+        visualColumn: 0,
+      },
+      selection: { hasSelection: false, startOffset: 0, endOffset: 0 },
+      carets: [],
+      ...(folder ? { project: { projectId: projectId(folder.uri.fsPath), name: folder.name, basePath: folder.uri.fsPath } } : {}),
     }
   }
 
@@ -223,7 +316,7 @@ class FastBridge {
     }
     const type = message.type || ''
     const target = message.target || {}
-    const mutating = ['command.navigate', 'command.select', 'command.find', 'command.requestFocus'].includes(type)
+    const mutating = ['command.navigate', 'command.select', 'command.find', 'command.requestFocus', 'command.fullScreen', 'command.copyResourcePath'].includes(type)
     if (mutating && !target.instanceId) {
       return this.send('command.result', this.error(type, 'INVALID_MESSAGE', 'target.instanceId is required for this command'), message.id)
     }
@@ -231,11 +324,13 @@ class FastBridge {
     try {
       let data
       if (type === 'command.ping') data = undefined
-      else if (type === 'command.getState') data = this.snapshot()
+      else if (type === 'command.getState') data = await this.snapshot()
       else if (type === 'command.listProjects') data = this.projects()
       else if (type === 'command.navigate' || type === 'command.select') data = await this.navigate(type, message.payload || {}, target)
       else if (type === 'command.find') data = await this.find(message.payload || {}, target)
       else if (type === 'command.requestFocus') data = await this.requestFocus()
+      else if (type === 'command.fullScreen') data = await this.fullScreen()
+      else if (type === 'command.copyResourcePath') data = await this.copyResourcePath()
       else return this.send('command.result', this.error(type, 'UNKNOWN_COMMAND', `Unsupported command: ${type}`), message.id)
       this.send('command.result', { success: true, command: type, ...(data === undefined ? {} : { data }) }, message.id)
     } catch (error) {
@@ -342,6 +437,136 @@ class FastBridge {
     await vscode.window.showTextDocument(editor.document, { viewColumn: editor.viewColumn, preserveFocus: false })
     const folder = vscode.workspace.getWorkspaceFolder(editor.document.uri)
     return { project: folder ? folder.name : '' }
+  }
+
+  async fullScreen() {
+    // `isFullscreen` is the VS Code desktop context key. Querying it again
+    // here makes the command idempotent even when the cached bridge snapshot
+    // was produced before the window finished opening.
+    const value = await this.contextKeyValue('isFullscreen')
+    if (value === true || value === 'true') return { fullScreen: true }
+    if (value !== false && value !== 'false') return { fullScreen: null, skipped: true }
+    await vscode.commands.executeCommand('workbench.action.toggleFullScreen')
+    return { fullScreen: true }
+  }
+
+  async contextKeyValue(key) {
+    try {
+      return await vscode.commands.executeCommand('getContextKeyValue', key)
+    } catch (error) {
+      return undefined
+    }
+  }
+
+  async copyResourcePath(assumeFilesExplorerFocus = false) {
+    const activeResourcePath = this.contextResourcePath(
+      await this.contextKeyValue('resource')
+    )
+    let explorerFocused = assumeFilesExplorerFocus
+    if (!assumeFilesExplorerFocus) {
+      const [explorerFocus, explorerViewletFocus, sideBarFocus, activeViewlet,
+        isMultiSelection, isFileSystemResource] =
+        await Promise.all([
+          this.contextKeyValue('filesExplorerFocus'),
+          this.contextKeyValue('explorerViewletFocus'),
+          this.contextKeyValue('sideBarFocus'),
+          this.contextKeyValue('activeViewlet'),
+          this.contextKeyValue('listMultiSelection'),
+          this.contextKeyValue('isFileSystemResource'),
+        ])
+      const isTrue = value => value === true || value === 'true'
+      const hasValue = value => value !== undefined && value !== null
+      explorerFocused = isTrue(explorerFocus) || isTrue(explorerViewletFocus) ||
+        isTrue(sideBarFocus) && activeViewlet === 'workbench.view.explorer'
+      const focusContextKnown = [explorerFocus, explorerViewletFocus, sideBarFocus, activeViewlet]
+        .some(hasValue)
+      if (focusContextKnown && !explorerFocused) {
+        // Image and other custom editors do not have activeTextEditor, but
+        // their selected resource is still the active `resource`. Support the
+        // requested current-resource fallback for those editors only.
+        if (!vscode.window.activeTextEditor && activeResourcePath &&
+          await this.isRegularFilePath(activeResourcePath)) {
+          return {handled: true, path: activeResourcePath}
+        }
+        return {handled: false}
+      }
+      if (isTrue(isMultiSelection) ||
+        isFileSystemResource === false || isFileSystemResource === 'false') {
+        return {handled: false}
+      }
+    }
+
+    // `resource` is the active editor resource, not necessarily the focused
+    // Explorer row. Ask VS Code's built-in Explorer command for the focused
+    // row instead of trying to infer it from that context key.
+    const commands = ['copyFilePath']
+    const available = await vscode.commands.getCommands(true)
+    for (const command of commands) {
+      if (!available.includes(command)) continue
+      let previousClipboard = ''
+      let copiedPath = ''
+      try {
+        previousClipboard = await vscode.env.clipboard.readText()
+        // Prevent an old path from being mistaken for the result when the
+        // built-in command does not update the clipboard for a resource.
+        await vscode.env.clipboard.writeText('')
+        await vscode.commands.executeCommand(command)
+        copiedPath = this.contextResourcePath(await vscode.env.clipboard.readText())
+        if (copiedPath && await this.isExistingResourcePath(copiedPath)) {
+          return {handled: true, path: copiedPath}
+        }
+      } catch (error) {
+        // Preserve the existing Fast Ctrl+Shift+C behavior when the command
+        // is unavailable or cannot resolve the focused Explorer row.
+      } finally {
+        if (!copiedPath && previousClipboard) {
+          try {
+            await vscode.env.clipboard.writeText(previousClipboard)
+          } catch (error) {
+            // Ignore clipboard restoration failures.
+          }
+        }
+      }
+    }
+
+    // Some VS Code resource editors (notably image previews) do not expose
+    // their Explorer row to extensions. In that case use the active editor
+    // resource, which is the selected file after it has been opened.
+    if (activeResourcePath &&
+      ((explorerFocused && await this.isExistingResourcePath(activeResourcePath)) ||
+        await this.isRegularFilePath(activeResourcePath))) {
+      return {handled: true, path: activeResourcePath}
+    }
+    return {handled: false}
+  }
+
+  contextResourcePath(value) {
+    if (typeof value !== 'string' || !value.trim()) return ''
+    const text = value.trim()
+    try {
+      if (/^file:/i.test(text)) return path.normalize(vscode.Uri.parse(text).fsPath)
+    } catch (error) {
+      return ''
+    }
+    return path.isAbsolute(text) ? path.normalize(text) : ''
+  }
+
+  async isRegularFilePath(resourcePath) {
+    return (await this.resourceType(resourcePath) & vscode.FileType.File) !== 0
+  }
+
+  async isExistingResourcePath(resourcePath) {
+    const type = await this.resourceType(resourcePath)
+    return (type & (vscode.FileType.File | vscode.FileType.Directory)) !== 0
+  }
+
+  async resourceType(resourcePath) {
+    try {
+      const stat = await vscode.workspace.fs.stat(vscode.Uri.file(resourcePath))
+      return stat.type
+    } catch (error) {
+      return vscode.FileType.Unknown
+    }
   }
 
   log(text) {

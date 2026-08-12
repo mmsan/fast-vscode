@@ -1,44 +1,37 @@
 # Fast VS Code Plugin — Agent Guide
 
-## Project overview
+## Stable identity and scope
 
-This repository contains the SCS VS Code extension and the Fast Bridge client. The bridge connects VS Code editor state to the local Fast WebSocket service and accepts targeted navigation commands.
+This repository contains the SCS VS Code extension and Fast Bridge client.
 
-Keep these public identities stable:
+- Extension ID: `mmsan.scs`; package: `scs`; entry point: `extension.js`.
+- Bridge client: `fast-vscode-bridge`; editor identity: `ide: Visual Studio Code`. Read the release version from `package.json`; never hard-code it.
+- `fast-vscode-bridge` is recognized by `D:\v\fast\utils\vscode-socket.js`; update that service before changing the value.
 
-- Extension ID: `mmsan.scs`
-- Package name: `scs`
-- Entry point: `extension.js`
-- Bridge client value: `fast-vscode-bridge`
-- Actual editor identity: `ide: Visual Studio Code`
-- Current version: always read `version` from `package.json`; do not hard-code it in documentation or scripts.
-
-The client value is recognized by `D:\v\fast\utils\vscode-socket.js`. Do not rename it without updating and validating that service.
-
-## Important files
-
-- `extension.js`: SCS formatting and extension activation.
-- `fastBridge.js`: WebSocket lifecycle, snapshots, identities, reconnect behavior, and inbound commands.
-- `package.json`: extension manifest, settings, commands, dependencies, and release version.
-- `.vscodeignore`: controls VSIX contents.
-- `publish-local-plugin.ps1`: local version bump, dependency restore, packaging, and VS Code installation.
-- `publish-local-plugin.cmd`: execution-policy-safe Windows entry point.
+Key surfaces: `extension.js` (activation/formatting), `fastBridge.js` (WebSocket, snapshots, identities, reconnect, commands), `package.json` / `package-lock.json` (manifest/version/dependencies), and the publish scripts.
 
 ## Bridge behavior and security
 
-The default endpoint is `ws://127.0.0.1:19900`. Host, port, path, bearer token, auto-connect, text sharing, and context length must remain configurable.
+- Default endpoint is `ws://127.0.0.1:19900`; keep host, port, path, bearer token, auto-connect, text sharing, and context length configurable.
+- Preserve `installationId`, `instanceId`, `connectionId`, deterministic project IDs, project roots, and open-workspace identities. Mutating commands require `target.instanceId` and ignore other instances.
+- Resolve files only inside open workspace roots; reject traversal and absolute paths outside them.
+- `command.copyResourcePath` handles only one focused Files Explorer file/directory. Keep its Ctrl+Shift+C keybinding limited by `isFileSystemResource` and `!listMultiSelection` so other contexts retain Fast Ctrl+Shift+C.
+- A caret is the text insertion caret, not the mouse pointer. `fastBridge.sendText` controls text sharing; when disabled, omit selected/nearby text but retain structural ranges. Never log source text, selections, or bearer tokens.
+- Preserve `D:\v\fast\fast.js` binding of the active file/workspace root to `f.fast.currentWindow.filePath` and `.dir`.
 
-Preserve `installationId`, `instanceId`, `connectionId`, deterministic project IDs, project roots, and open-project identities. Mutating commands require `target.instanceId`; commands for another instance must be ignored. Resolve files only inside an open workspace root and reject path traversal or absolute paths outside those roots.
+When changing handshake fields, events, commands, or payloads, update the VS Code and generic Node adapters with backward-compatible routing, then run:
 
-Caret means the text insertion caret, not the mouse pointer. Do not add mouse-position collection unless explicitly requested. Keep text sharing controlled by `fastBridge.sendText`; when disabled, omit selected text and nearby text while retaining structural positions and ranges. Never log source text, selections, or bearer tokens.
+```powershell
+node --check .\extension.js
+node --check .\fastBridge.js
+node --check D:\v\fast\utils\vscode-socket.js
+node --check D:\v\fast\utils\socket-browser.js
+node --check D:\v\fast\utils\f.mjs
+```
 
-When changing handshake fields, event names, commands, or payloads, inspect `D:\v\fast\utils\vscode-socket.js` and `D:\v\fast\utils\socket-browser.js`, and keep the Node.js routing backward compatible. Validate all three JavaScript files with `node --check`.
+## Local package publishing
 
-`D:\v\fast\fast.js` copies the active VS Code bridge file and workspace root onto `f.fast.currentWindow.filePath` and `f.fast.currentWindow.dir`. Preserve this binding when changing current-editor lookup behavior.
-
-## Local publishing
-
-For a normal local release, run:
+For a normal local release:
 
 ```powershell
 .\publish-local-plugin.cmd
@@ -46,14 +39,16 @@ For a normal local release, run:
 
 The script must:
 
-1. Increment the patch version in both `package.json` and `package-lock.json`.
+1. Increment the patch version in `package.json` and `package-lock.json`.
 2. Restore both files if dependency installation, packaging, or installation fails.
 3. Install dependencies with lifecycle scripts disabled.
-4. build `scs-<version>.vsix` with `@vscode/vsce`.
-5. Install or update it with `code --install-extension ... --force`.
-6. Tell the user to run `Developer: Reload Window`.
+4. Build `scs-<version>.vsix` with `@vscode/vsce`.
+5. Install/update it with `code --install-extension ... --force`.
+6. Tell the user to run **Developer: Reload Window**.
 
-Use `-NoVersionBump` only to rebuild an existing version. Use `-SkipInstall` for packaging verification without changing the installed VS Code extension. A release is not complete until the VSIX exists and syntax, dependency, and package checks pass.
+Use `-NoVersionBump` only to retry an interrupted/manual version bump. Use `-SkipInstall` for package-only verification. A release is complete only when the VSIX exists and syntax, dependency, and package checks pass.
+
+For a coordinated release, use the highest current version across IDEA, Visual Studio, and VS Code, increment the patch component once, write that exact version to `package.json`, `package-lock.json`, the IDEA property, the VSIX manifest/assembly files, and `D:\v\fast\bridge-version.json` when maintained. Then run this publisher with `-NoVersionBump`; do not let `npm version patch` create a different version. Verify the generated `scs-<shared-version>.vsix` before installation or reload.
 
 Recommended verification:
 
@@ -64,4 +59,13 @@ npm.cmd ls --depth=0
 .\publish-local-plugin.cmd -NoVersionBump -SkipInstall
 ```
 
-Do not commit npm caches, temporary packaging files, or generated VSIX files unless the user explicitly wants the artifact tracked.
+Do not commit npm caches, temporary package files, or generated VSIX files unless explicitly requested.
+
+## Three-plugin synchronization
+
+Any shared event, command, identity, targeting, path-safety, text-sharing, reconnect, or disposal change must be updated across:
+
+- Plugins: `D:\v\fast-idea` and `D:\v\fast-visual-studio`.
+- Fast adapters: `D:\v\fast\utils\idea-socket.js`, `visual-studio-socket.js`, and `vscode-socket.js`.
+
+Also update affected protocol documents and README examples. Keep VS Code-specific language/UI details local. For shared changes, verify all three installable packages with their repository procedures; source-level checks alone are insufficient.
