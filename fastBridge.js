@@ -1,9 +1,19 @@
 const vscode = require('vscode')
 const crypto = require('crypto')
+const fs = require('fs')
 const path = require('path')
+const { execFile } = require('child_process')
+const { promisify } = require('util')
 const WebSocket = require('ws')
 
 const uuid = () => crypto.randomUUID()
+const execFileAsync = promisify(execFile)
+const pythonPackageName = /^[A-Za-z_][A-Za-z0-9_.-]*$/
+const compactLogText = value => {
+  if (value === undefined || value === null || !String(value).trim()) return ''
+  const text = String(value).replace(/bearer\s+\S+/ig, 'Bearer <redacted>').replace(/[\r\n]+/g, ' ').trim()
+  return text.length <= 500 ? text : `${text.slice(0, 500)}...`
+}
 
 function projectId(basePath) {
   const bytes = crypto.createHash('md5').update(path.resolve(basePath || '').toLowerCase()).digest()
@@ -11,6 +21,143 @@ function projectId(basePath) {
   bytes[8] = (bytes[8] & 0x3f) | 0x80
   const value = bytes.toString('hex')
   return `${value.slice(0, 8)}-${value.slice(8, 12)}-${value.slice(12, 16)}-${value.slice(16, 20)}-${value.slice(20)}`
+}
+
+const pythonPackageQuery = [
+  'import importlib.util, importlib.metadata, json, os, sys',
+  'items = {}',
+  'for item in sys.argv[1:]:',
+  "    import_name, distribution_name = item.split('\\t', 1)",
+  '    installed = False',
+  '    version = None',
+  '    try: installed = importlib.util.find_spec(import_name) is not None',
+  '    except (ImportError, ModuleNotFoundError, ValueError): pass',
+  '    try:',
+  '        version = importlib.metadata.version(distribution_name)',
+  '        installed = True',
+  '    except importlib.metadata.PackageNotFoundError: pass',
+  "    items[import_name] = {'installed': installed, **({'version': version} if version else {})}",
+  "environment_type = 'conda' if os.environ.get('CONDA_PREFIX') else ('venv' if sys.prefix != getattr(sys, 'base_prefix', sys.prefix) else 'system')",
+  "print(json.dumps({'interpreter': sys.executable, 'version': '.'.join(str(part) for part in sys.version_info[:3]), 'environmentType': environment_type, 'packages': items}))",
+].join('\n')
+
+function syntaxContextAt(text, offset, languageId) {
+  const stack = []
+  const isPython = /^(python|cython)$/.test(languageId || '')
+  const isWord = value => /[A-Za-z0-9_$]/.test(value)
+  const previousWord = index => {
+    let end = index
+    while (end >= 0 && /\s/.test(text[end])) end--
+    let start = end
+    while (start >= 0 && isWord(text[start])) start--
+    return text.slice(start + 1, end + 1)
+  }
+  const objectBrace = index => {
+    if (/^(json|jsonc)$/.test(languageId || '')) return 'braces'
+    const before = text.slice(Math.max(0, index - 12), index).trimEnd()
+    const word = previousWord(index - 1)
+    if (/^(if|for|while|switch|catch|try|finally|class|function|else|do)$/.test(word)) return 'block'
+    if (/\b(if|for|while|switch|catch|function|class)\s*\([^)]*\)$/.test(before)) return 'block'
+    if (/[=,:([{]|=>\s*$/.test(before.slice(-1)) || /=>\s*$/.test(before)) return 'braces'
+    return 'block'
+  }
+  let quote = null
+  let escaped = false
+  let lineComment = false
+  let blockComment = false
+  for (let index = 0; index < Math.min(Math.max(0, offset), text.length); index++) {
+    const current = text[index]
+    const next = text[index + 1]
+    if (lineComment) {
+      if (current === '\n') lineComment = false
+      continue
+    }
+    if (blockComment) {
+      if (current === '*' && next === '/') { blockComment = false; index++ }
+      continue
+    }
+    if (quote) {
+      if (escaped) { escaped = false; continue }
+      if (current === '\\') { escaped = true; continue }
+      if (current === quote) { quote = null; continue }
+      continue
+    }
+    if (current === '/' && next === '/') { lineComment = true; index++; continue }
+    if (current === '/' && next === '*') { blockComment = true; index++; continue }
+    if (isPython && current === '#') { lineComment = true; continue }
+    if (current === "'" || current === '"' || current === '`') { quote = current; continue }
+    if (current === '{') stack.push(objectBrace(index))
+    else if (current === '(') stack.push('parentheses')
+    else if (current === '[') stack.push('bracket')
+    else if (current === '}' || current === ')' || current === ']') stack.pop()
+  }
+  if (quote === "'") return 'singleQuote'
+  if (quote === '"') return 'doubleQuote'
+  if (quote === '`') return 'backtick'
+  const current = stack[stack.length - 1]
+  return current === 'braces' || current === 'parentheses' ? current : 'none'
+}
+
+function extractExpression(text, offset) {
+  if (!text) return ''
+  let cursor = Math.max(0, Math.min(offset, text.length))
+  let end = cursor
+  while (end < text.length && /[A-Za-z0-9_$]/.test(text[end])) end++
+  let start = cursor
+  while (start > 0 && /[A-Za-z0-9_$]/.test(text[start - 1])) start--
+  const matchingOpen = (close, open, closing) => {
+    let depth = 0
+    for (let index = close; index >= 0; index--) {
+      if (text[index] === closing) depth++
+      else if (text[index] === open && --depth === 0) return index
+    }
+    return -1
+  }
+  while (start > 0) {
+    let index = start - 1
+    while (index >= 0 && /\s/.test(text[index])) index--
+    if (text[index] !== '.') break
+    index--
+    while (index >= 0 && /\s/.test(text[index])) index--
+    if (text[index] === ')') {
+      const open = matchingOpen(index, '(', ')')
+      if (open < 0) break
+      let nameEnd = open
+      let nameStart = nameEnd - 1
+      while (nameStart >= 0 && /[A-Za-z0-9_$]/.test(text[nameStart])) nameStart--
+      start = nameStart + 1
+    } else {
+      while (index >= 0 && /[A-Za-z0-9_$]/.test(text[index])) index--
+      start = index + 1
+    }
+  }
+  const value = text.slice(start, end).replace(/\s+/g, '')
+  return /^[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*|\([^\n\r]*\))*\.?$/.test(value) ? value : ''
+}
+
+function hoverType(hover) {
+  const values = []
+  for (const item of hover?.contents || []) values.push(typeof item === 'string' ? item : item?.value || '')
+  const text = values.join('\n').replace(/```[^\n]*\n?|```/g, '').trim()
+  if (!text) return ''
+  const line = text.split(/\r?\n/).find(value => /[:()]|\b(class|interface|function|method|property)\b/i.test(value)) || text.split(/\r?\n/)[0]
+  const match = line.match(/:\s*([^\n]+)$/)
+  return (match ? match[1] : line).trim().replace(/^\([^)]*\)\s*/, '')
+}
+
+function completionMembers(completion) {
+  const result = []
+  const seen = new Set()
+  for (const item of completion?.items || []) {
+    const name = typeof item.label === 'string' ? item.label : item.label?.label
+    if (!name || seen.has(name) || result.length >= 15) continue
+    seen.add(name)
+    const kind = {2: 'method', 3: 'method', 4: 'method', 5: 'property', 6: 'variable', 7: 'type', 8: 'type', 10: 'property'}[item.kind] || 'member'
+    const member = {name, kind}
+    if (typeof item.detail === 'string' && item.detail.trim()) member.type = item.detail.trim()
+    result.push(member)
+  }
+  return result
 }
 
 class FastBridge {
@@ -21,14 +168,22 @@ class FastBridge {
     this.sequence = 0
     this.generation = 0
     this.reconnectAttempt = 0
+    this.connectionFailures = 0
     this.editorOpenedKey = null
     this.editorOpenedAt = 0
-    this.output = vscode.window.createOutputChannel('Fast Bridge')
+    this.output = this.createOutputChannel()
+    this.logDirectory = (this.context.logUri || this.context.globalStorageUri || this.context.storageUri)?.fsPath || ''
+  }
+
+  createOutputChannel() {
+    try {
+      return vscode.window.createOutputChannel('Fast Bridge', { log: true })
+    } catch (error) {
+      return vscode.window.createOutputChannel('Fast Bridge')
+    }
   }
 
   async start() {
-    this.installationId = this.context.globalState.get('fastBridge.installationId') || uuid()
-    await this.context.globalState.update('fastBridge.installationId', this.installationId)
     this.context.subscriptions.push(
       this.output,
       vscode.window.onDidChangeActiveTextEditor(() => this.schedule('focus.changed', 0)),
@@ -43,6 +198,7 @@ class FastBridge {
       vscode.commands.registerCommand('fastBridge.copySelectedResourcePath', () => this.copyResourcePath(true)),
       { dispose: () => this.dispose() },
     )
+    this.log(`service started; autoConnect=${this.settings().autoConnect}`)
     if (this.settings().autoConnect) this.connect()
   }
 
@@ -70,6 +226,7 @@ class FastBridge {
   reconnect() {
     this.generation++
     this.reconnectAttempt = 0
+    this.log('settings changed; reconnecting')
     if (this.socket) this.socket.close(1000, 'settings changed')
     this.socket = null
     if (!this.disposed && this.settings().autoConnect) this.connect()
@@ -85,56 +242,64 @@ class FastBridge {
     try {
       socket = new WebSocket(`ws://${settings.host.trim()}:${settings.port}${socketPath}`, { headers, handshakeTimeout: 1000 })
     } catch (error) {
-      this.log(`连接配置无效：${error.message}`)
+      this.log(`connection configuration failed: ${error.message}`, 'error')
       return
     }
+    let opened = false
     socket.on('open', async () => {
       if (generation !== this.generation || this.disposed) return socket.close()
       this.socket = socket
       this.connectionId = uuid()
       this.reconnectAttempt = 0
-      this.log('已连接')
+      opened = true
+      const failures = this.connectionFailures
+      this.connectionFailures = 0
+      this.log(`connected${failures > 0 ? `; recoveredAfterFailures=${failures}` : ''}`)
       this.send('bridge.hello', await this.identity())
       this.schedule('editor.state', 0)
     })
     socket.on('message', data => {
       if (data.length > 1024 * 1024) return socket.close(1009, 'message too large')
-      this.handle(data.toString()).catch(error => this.log(error.stack || error.message))
+      this.handle(data.toString()).catch(error => this.log(error.stack || error.message, 'error'))
     })
-    socket.on('error', error => this.log(`连接错误：${error.message}`))
-    socket.on('close', () => {
+    socket.on('error', error => this.recordConnectionFailure(error))
+    socket.on('close', (code, reason) => {
       if (this.socket === socket) this.socket = null
       if (this.disposed || generation !== this.generation || !this.settings().autoConnect) return
+      if (opened) this.log(`connection closed; code=${code}; reason=${reason?.toString() || ''}`)
       const delays = [200, 500, 1000, 2000]
-      setTimeout(() => generation === this.generation && this.connect(), delays[Math.min(this.reconnectAttempt++, 3)])
+      const attempt = this.reconnectAttempt++
+      const delay = delays[Math.min(attempt, delays.length - 1)]
+      if (attempt < 3 || (attempt + 1) % 10 === 0) this.log(`reconnect scheduled; delayMs=${delay}`)
+      setTimeout(() => generation === this.generation && this.connect(), delay)
     })
+  }
+
+  recordConnectionFailure(error) {
+    const count = ++this.connectionFailures
+    if (count <= 3 || count % 10 === 0) {
+      this.log(`connection failed; attempt=${count}; ${error?.message || error}`, 'warn')
+    }
   }
 
   async identity() {
     const snapshot = await this.snapshot()
     return {
       client: 'fast-vscode-bridge',
-      clientId: this.installationId,
-      installationId: this.installationId,
       instanceId: this.instanceId,
       connectionId: this.connectionId,
-      ide: vscode.env.appName,
-      build: vscode.version,
-      pluginVersion: this.context.extension.packageJSON.version,
       projects: this.projects(),
       processId: process.pid,
-      nativeWindows: { supported: false, windows: [] },
       fullScreen: snapshot.fullScreen,
       editorOpenedAt: snapshot.editorOpenedAt,
       activeProject: snapshot.activeEditor?.project || null,
-      capabilities: ['state', 'navigate', 'select', 'find', 'requestFocus', 'fullScreen', 'listProjects', 'copyResourcePath'],
+      capabilities: ['state', 'navigate', 'select', 'find', 'requestFocus', 'fullScreen', 'listProjects', 'copyResourcePath', 'pythonPackages'],
     }
   }
 
   send(type, payload, replyTo) {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return
     const source = {
-      installationId: this.installationId,
       instanceId: this.instanceId,
       connectionId: this.connectionId,
       projects: this.projects(),
@@ -155,7 +320,11 @@ class FastBridge {
       source,
     }
     if (replyTo) message.replyTo = replyTo
-    this.socket.send(JSON.stringify(message))
+    try {
+      this.socket.send(JSON.stringify(message))
+    } catch (error) {
+      this.log(`message send failed; type=${type}; ${error.message}`, 'warn')
+    }
   }
 
   schedule(type, delay) {
@@ -164,7 +333,7 @@ class FastBridge {
       try {
         this.send(type, await this.snapshot())
       } catch (error) {
-        this.log(`读取当前资源失败：${error.message}`)
+        this.log(`读取当前资源失败：${error.message}`, 'warn')
       }
     }, delay)
   }
@@ -191,7 +360,7 @@ class FastBridge {
         : resource
           ? { type: 'editor', className: 'vscode.ResourceEditor', enabled: true, visible: true, showing: true }
           : { type: 'none' },
-      activeEditor: editor ? this.describe(editor) : resource ? this.describeResource(resource) : null,
+      activeEditor: editor ? await this.describe(editor) : resource ? this.describeResource(resource) : null,
       activeResource,
       editorOpenedAt,
       // An unavailable context key is unknown, not "not fullscreen". Treating
@@ -255,7 +424,7 @@ class FastBridge {
     }
   }
 
-  describe(editor) {
+  async describe(editor) {
     const document = editor.document
     const selection = editor.selection
     const folder = vscode.workspace.getWorkspaceFolder(document.uri)
@@ -299,6 +468,7 @@ class FastBridge {
       })),
     }
     if (folder) result.project = { projectId: projectId(folder.uri.fsPath), name: folder.name, basePath: folder.uri.fsPath }
+    Object.assign(result, await this.editorContext(editor, offset))
     if (settings.sendText) {
       const radius = Math.max(0, settings.contextCharacters)
       const text = document.getText()
@@ -309,6 +479,32 @@ class FastBridge {
     return result
   }
 
+  async editorContext(editor, offset) {
+    const text = editor.document.getText()
+    const syntaxContext = syntaxContextAt(text, offset, editor.document.languageId)
+    const context = {
+      context: syntaxContext,
+    }
+    const expression = extractExpression(text, offset)
+    if (!expression || ['singleQuote', 'doubleQuote', 'backtick'].includes(syntaxContext)) return context
+
+    const expressionContext = { expression, kind: 'reference' }
+    try {
+      const [hover, completion] = await Promise.all([
+        vscode.commands.executeCommand('vscode.executeHoverProvider', editor.document.uri, editor.selection.active),
+        vscode.commands.executeCommand('vscode.executeCompletionItemProvider', editor.document.uri, editor.selection.active),
+      ])
+      const type = hoverType(hover)
+      if (type) expressionContext.type = type
+      const members = completionMembers(completion)
+      if (members.length) expressionContext.members = members
+    } catch (error) {
+      // Language-service providers are optional. The generic expression still
+      // remains useful when a language extension is unavailable or busy.
+    }
+    return { expressionContext }
+  }
+
   async handle(raw) {
     let message
     try { message = JSON.parse(raw) } catch (error) {
@@ -316,7 +512,7 @@ class FastBridge {
     }
     const type = message.type || ''
     const target = message.target || {}
-    const mutating = ['command.navigate', 'command.select', 'command.find', 'command.requestFocus', 'command.fullScreen', 'command.copyResourcePath'].includes(type)
+    const mutating = ['command.navigate', 'command.select', 'command.find', 'command.requestFocus', 'command.fullScreen', 'command.copyResourcePath', 'command.queryPythonPackages'].includes(type)
     if (mutating && !target.instanceId) {
       return this.send('command.result', this.error(type, 'INVALID_MESSAGE', 'target.instanceId is required for this command'), message.id)
     }
@@ -326,6 +522,7 @@ class FastBridge {
       if (type === 'command.ping') data = undefined
       else if (type === 'command.getState') data = await this.snapshot()
       else if (type === 'command.listProjects') data = this.projects()
+      else if (type === 'command.queryPythonPackages') data = await this.queryPythonPackages(message.payload || {}, target)
       else if (type === 'command.navigate' || type === 'command.select') data = await this.navigate(type, message.payload || {}, target)
       else if (type === 'command.find') data = await this.find(message.payload || {}, target)
       else if (type === 'command.requestFocus') data = await this.requestFocus()
@@ -335,13 +532,64 @@ class FastBridge {
       this.send('command.result', { success: true, command: type, ...(data === undefined ? {} : { data }) }, message.id)
     } catch (error) {
       const fallback = type === 'command.navigate' || type === 'command.select' ? 'NAVIGATION_FAILED'
-        : type === 'command.find' ? 'FIND_FAILED' : 'COMMAND_FAILED'
+        : type === 'command.find' ? 'FIND_FAILED' : type === 'command.queryPythonPackages' ? 'PYTHON_QUERY_FAILED' : 'COMMAND_FAILED'
       this.send('command.result', this.error(type, error.code || fallback, error.message), message.id)
     }
   }
 
   error(command, code, message) {
     return { success: false, command: command || 'unknown', error: { code, message: message || 'Unknown error' } }
+  }
+
+  async queryPythonPackages(payload, target) {
+    const requested = Array.isArray(payload.packages) ? payload.packages : []
+    const packages = []
+    for (const item of requested) {
+      const importName = typeof item === 'string' ? item : item && item.importName
+      const distributionName = typeof item === 'string' ? item : item && (item.distributionName || item.importName)
+      if (!pythonPackageName.test(importName || '') || !pythonPackageName.test(distributionName || '') || packages.some(value => value.importName === importName)) continue
+      packages.push({importName, distributionName})
+    }
+    if (!packages.length) throw Object.assign(new Error('payload.packages must contain at least one package name'), {code: 'INVALID_QUERY'})
+
+    const folder = this.projectFolder(target, payload)
+    const interpreter = await this.pythonInterpreter(folder)
+    if (!interpreter) throw Object.assign(new Error('No Python interpreter is configured for the targeted workspace'), {code: 'PYTHON_INTERPRETER_NOT_FOUND'})
+    const args = packages.map(item => `${item.importName}\t${item.distributionName}`)
+    const result = await execFileAsync(interpreter, ['-c', pythonPackageQuery, ...args], {
+      cwd: folder ? folder.uri.fsPath : undefined,
+      timeout: 5000,
+      maxBuffer: 1024 * 1024,
+      windowsHide: true,
+    })
+    try {
+      const value = JSON.parse(result.stdout.trim())
+      if (!value || typeof value !== 'object' || !value.packages) throw new Error('Python interpreter returned invalid JSON')
+      return value
+    } catch (error) {
+      throw Object.assign(new Error('Python interpreter returned invalid package data'), {code: 'PYTHON_QUERY_FAILED'})
+    }
+  }
+
+  projectFolder(target, payload) {
+    const requestedBase = payload.projectBasePath || target.projectBasePath
+    return (vscode.workspace.workspaceFolders || []).find(folder => {
+      if (requestedBase && path.resolve(folder.uri.fsPath).toLowerCase() !== path.resolve(requestedBase).toLowerCase()) return false
+      return !target.projectId || projectId(folder.uri.fsPath) === target.projectId
+    }) || (vscode.window.activeTextEditor && vscode.workspace.getWorkspaceFolder(vscode.window.activeTextEditor.document.uri)) || null
+  }
+
+  async pythonInterpreter(folder) {
+    try {
+      const selected = await vscode.commands.executeCommand('python.interpreterPath')
+      if (typeof selected === 'string' && selected.trim()) return selected
+    } catch (error) {
+      // The Python extension is optional.
+    }
+    const configuration = vscode.workspace.getConfiguration('python', folder && folder.uri)
+    const configured = configuration.get('defaultInterpreterPath') || configuration.get('pythonPath')
+    if (typeof configured !== 'string' || !configured.trim()) return null
+    return path.isAbsolute(configured) || !folder ? configured : path.resolve(folder.uri.fsPath, configured)
   }
 
   resolveUri(requested, payload, target, allowActive) {
@@ -569,11 +817,38 @@ class FastBridge {
     }
   }
 
-  log(text) {
-    this.output.appendLine(`[${new Date().toLocaleTimeString()}] ${text}`)
+  log(text, level = 'info') {
+    const message = compactLogText(text)
+    const line = `[${new Date().toISOString()}] [${level.toUpperCase()}] ${message}`
+    const outputMethod = this.output && typeof this.output[level] === 'function' ? this.output[level] : null
+    if (outputMethod) outputMethod.call(this.output, message)
+    else this.output.appendLine(line)
+    this.writeLog(line)
+  }
+
+  writeLog(line) {
+    if (!this.logDirectory) return
+    try {
+      fs.mkdirSync(this.logDirectory, { recursive: true })
+      const cutoff = Date.now() - 3 * 24 * 60 * 60 * 1000
+      for (const name of fs.readdirSync(this.logDirectory)) {
+        if (!/^fast-vscode-bridge-\d{4}-\d{2}-\d{2}\.log$/.test(name)) continue
+        const file = path.join(this.logDirectory, name)
+        try {
+          if (fs.statSync(file).mtimeMs < cutoff) fs.unlinkSync(file)
+        } catch (error) {
+          // Ignore a file that disappeared or is locked while pruning.
+        }
+      }
+      const name = `fast-vscode-bridge-${new Date().toISOString().slice(0, 10)}.log`
+      fs.appendFileSync(path.join(this.logDirectory, name), `${line}\n`, 'utf8')
+    } catch (error) {
+      // The host LogOutputChannel remains the fallback when the file cannot be written.
+    }
   }
 
   dispose() {
+    this.log('service disposed')
     this.disposed = true
     this.generation++
     clearTimeout(this.pending)

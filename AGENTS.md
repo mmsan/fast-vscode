@@ -6,9 +6,9 @@ This repository contains the SCS VS Code extension and Fast Bridge client.
 
 - Extension ID: `mmsan.scs`; package: `scs`; entry point: `extension.js`.
 - Bridge client: `fast-vscode-bridge`; editor identity: `ide: Visual Studio Code`. Read the release version from `package.json`; never hard-code it.
-- `fast-vscode-bridge` is recognized by `D:\v\fast\utils\vscode-socket.js`; update that service before changing the value.
+- `fast-vscode-bridge` is recognized by `D:\v\fast\utils\socket-vscode.js`; update that service before changing the value.
 
-Key surfaces: `extension.js` (activation/formatting), `fastBridge.js` (WebSocket, snapshots, identities, reconnect, commands), `package.json` / `package-lock.json` (manifest/version/dependencies), and the publish scripts.
+Key surfaces: `extension.js` (activation/formatting), `fastBridge.js` (WebSocket, snapshots, identities, reconnect, commands, and rolling logs), `package.json` / `package-lock.json` (manifest/version/dependencies), and the publish scripts.
 
 ## Bridge behavior and security
 
@@ -18,13 +18,19 @@ Key surfaces: `extension.js` (activation/formatting), `fastBridge.js` (WebSocket
 - `command.copyResourcePath` handles only one focused Files Explorer file/directory. Keep its Ctrl+Shift+C keybinding limited by `isFileSystemResource` and `!listMultiSelection` so other contexts retain Fast Ctrl+Shift+C.
 - A caret is the text insertion caret, not the mouse pointer. `fastBridge.sendText` controls text sharing; when disabled, omit selected/nearby text but retain structural ranges. Never log source text, selections, or bearer tokens.
 - Preserve `D:\v\fast\fast.js` binding of the active file/workspace root to `f.fast.currentWindow.filePath` and `.dir`.
+- Keep `Fast Bridge` diagnostics concise, use the VS Code `LogOutputChannel`, and delete plugin log files older than three days.
+
+## Plugin log locations (on demand)
+
+- Output channel: `Fast Bridge`, available through the `Fast Bridge: 显示日志` command.
+- Daily file: `fast-vscode-bridge-YYYY-MM-DD.log` in VS Code's extension `logUri` directory.
 
 When changing handshake fields, events, commands, or payloads, update the VS Code and generic Node adapters with backward-compatible routing, then run:
 
 ```powershell
 node --check .\extension.js
 node --check .\fastBridge.js
-node --check D:\v\fast\utils\vscode-socket.js
+node --check D:\v\fast\utils\socket-vscode.js
 node --check D:\v\fast\utils\socket-browser.js
 node --check D:\v\fast\utils\f.mjs
 ```
@@ -66,6 +72,6 @@ Do not commit npm caches, temporary package files, or generated VSIX files unles
 Any shared event, command, identity, targeting, path-safety, text-sharing, reconnect, or disposal change must be updated across:
 
 - Plugins: `D:\v\fast-idea` and `D:\v\fast-visual-studio`.
-- Fast adapters: `D:\v\fast\utils\idea-socket.js`, `visual-studio-socket.js`, and `vscode-socket.js`.
+- Fast adapters: `D:\v\fast\utils\socket-idea.js`, `socket-visual-studio.js`, and `socket-vscode.js`.
 
 Also update affected protocol documents and README examples. Keep VS Code-specific language/UI details local. For shared changes, verify all three installable packages with their repository procedures; source-level checks alone are insufficient.

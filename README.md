@@ -6,7 +6,7 @@
 
 插件启动后默认连接 `ws://127.0.0.1:19900`，协议兼容 Fast Idea Bridge。它会上报当前工作区、文件、文本输入光标、选区及多光标状态，并支持服务端发起状态查询、文件导航、文本选择、查找、编辑器聚焦、编辑器全屏和资源管理器文件路径复制命令。
 
-状态快照中的 `payload.fullScreen` 表示 VS Code 是否全屏；`payload.editorOpenedAt` 是当前编辑器打开时间的 Unix 毫秒时间戳。握手 payload 也包含这些全屏判断字段，总服务只在 `bridge.hello` 时执行一次自动全屏判断。`command.fullScreen` 会幂等地执行 `workbench.action.toggleFullScreen`，已全屏或状态未知时不会切换。
+状态快照中的 `payload.activeEditor.context` 表示光标最内层的通用语法上下文，`expressionContext` 提供表达式/成员信息；`command.queryPythonPackages` 按需批量查询目标工作区解释器中的指定包。`payload.fullScreen` 表示 VS Code 是否全屏；`payload.editorOpenedAt` 是当前编辑器打开时间的 Unix 毫秒时间戳。握手 payload 也包含这些全屏判断字段，总服务只在 `bridge.hello` 时执行一次自动全屏判断。`command.fullScreen` 会幂等地执行 `workbench.action.toggleFullScreen`，已全屏或状态未知时不会切换。
 
 在 VS Code 的 Files Explorer（文件资源管理器）中选中一个文件或目录并按 `Ctrl+Shift+C` 时，会复制该资源的路径；多选或焦点不在 Files Explorer 时，不匹配这条快捷键，继续执行 Fast 原有的 Ctrl+Shift+C 逻辑。
 
@@ -17,6 +17,12 @@
 - `Fast Bridge: 重新连接`
 - `Fast Bridge: 显示日志`
 - `Fast Bridge: Copy Selected Explorer Resource Path`
+
+握手和状态消息只发送实例、连接、项目、进程、能力及自动全屏所需字段；不发送安装 ID、IDE/插件版本或不支持的原生窗口信息。
+
+## 日志
+
+插件使用 VS Code 的 `Fast Bridge` `LogOutputChannel`，可通过命令面板的“Fast Bridge: 显示日志”查看；同时在 VS Code 为扩展提供的标准日志目录下按天保存 `fast-vscode-bridge-YYYY-MM-DD.log`。每次写日志时自动删除 3 天以前的日志，仅记录连接、重连和错误摘要，不记录源码、选区或 Token。
 
 ## 本地发布
 
