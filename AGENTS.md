@@ -15,7 +15,7 @@ Key surfaces: `extension.js` (activation/formatting), `fastBridge.js` (WebSocket
 - Default endpoint is `ws://127.0.0.1:19900`; keep host, port, path, bearer token, auto-connect, text sharing, and context length configurable.
 - Preserve `installationId`, `instanceId`, `connectionId`, deterministic project IDs, project roots, and open-workspace identities. Mutating commands require `target.instanceId` and ignore other instances.
 - Resolve files only inside open workspace roots; reject traversal and absolute paths outside them.
-- `command.copyResourcePath` handles only one focused Files Explorer file/directory. Keep its Ctrl+Shift+C keybinding limited by `isFileSystemResource` and `!listMultiSelection` so other contexts retain Fast Ctrl+Shift+C.
+- `command.copyResourcePath` handles one or more focused Files Explorer files/directories. Return all absolute paths in `data.paths`, retain `data.path` for a single selection, and keep its Ctrl+Shift+C keybinding limited to Files Explorer filesystem resources so other contexts retain Fast Ctrl+Shift+C.
 - A caret is the text insertion caret, not the mouse pointer. `fastBridge.sendText` controls text sharing; when disabled, omit selected/nearby text but retain structural ranges. Never log source text, selections, or bearer tokens.
 - Preserve `D:\v\fast\fast.js` binding of the active file/workspace root to `f.fast.currentWindow.filePath` and `.dir`.
 - Keep `Fast Bridge` diagnostics concise, use the VS Code `LogOutputChannel`, and delete plugin log files older than three days.

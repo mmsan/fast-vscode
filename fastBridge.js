@@ -293,7 +293,7 @@ class FastBridge {
       fullScreen: snapshot.fullScreen,
       editorOpenedAt: snapshot.editorOpenedAt,
       activeProject: snapshot.activeEditor?.project || null,
-      capabilities: ['state', 'navigate', 'select', 'find', 'requestFocus', 'fullScreen', 'listProjects', 'copyResourcePath', 'pythonPackages'],
+      capabilities: ['state', 'navigate', 'select', 'find', 'requestFocus', 'fullScreen', 'isFullScreen', 'listProjects', 'copyResourcePath', 'pythonPackages'],
     }
   }
 
@@ -353,7 +353,7 @@ class FastBridge {
           : {}),
       }
       : null
-    const fullScreen = await this.contextKeyValue('isFullscreen')
+    const fullScreen = (await this.isFullScreen()).fullScreen
     return {
       focus: editor
         ? { type: 'editor', className: 'vscode.TextEditor', enabled: true, visible: true, showing: true }
@@ -365,7 +365,7 @@ class FastBridge {
       editorOpenedAt,
       // An unavailable context key is unknown, not "not fullscreen". Treating
       // it as false would make the toggle command shrink the window.
-      fullScreen: fullScreen === undefined ? null : fullScreen === true || fullScreen === 'true',
+      fullScreen,
     }
   }
 
@@ -521,6 +521,7 @@ class FastBridge {
       let data
       if (type === 'command.ping') data = undefined
       else if (type === 'command.getState') data = await this.snapshot()
+      else if (type === 'command.isFullScreen') data = await this.isFullScreen()
       else if (type === 'command.listProjects') data = this.projects()
       else if (type === 'command.queryPythonPackages') data = await this.queryPythonPackages(message.payload || {}, target)
       else if (type === 'command.navigate' || type === 'command.select') data = await this.navigate(type, message.payload || {}, target)
@@ -687,15 +688,18 @@ class FastBridge {
     return { project: folder ? folder.name : '' }
   }
 
-  async fullScreen() {
-    // `isFullscreen` is the VS Code desktop context key. Querying it again
-    // here makes the command idempotent even when the cached bridge snapshot
-    // was produced before the window finished opening.
+  async isFullScreen() {
     const value = await this.contextKeyValue('isFullscreen')
-    if (value === true || value === 'true') return { fullScreen: true }
-    if (value !== false && value !== 'false') return { fullScreen: null, skipped: true }
+    return {fullScreen: value === undefined || value === null ? null : value === true || value === 'true'}
+  }
+
+  async fullScreen() {
+    const state = await this.isFullScreen()
+    if (state.fullScreen === true) return state
+    if (state.fullScreen !== false) return {...state, skipped: true}
     await vscode.commands.executeCommand('workbench.action.toggleFullScreen')
-    return { fullScreen: true }
+    await new Promise(resolve => setTimeout(resolve, 80))
+    return this.isFullScreen()
   }
 
   async contextKeyValue(key) {
@@ -713,13 +717,12 @@ class FastBridge {
     let explorerFocused = assumeFilesExplorerFocus
     if (!assumeFilesExplorerFocus) {
       const [explorerFocus, explorerViewletFocus, sideBarFocus, activeViewlet,
-        isMultiSelection, isFileSystemResource] =
+        isFileSystemResource] =
         await Promise.all([
           this.contextKeyValue('filesExplorerFocus'),
           this.contextKeyValue('explorerViewletFocus'),
           this.contextKeyValue('sideBarFocus'),
           this.contextKeyValue('activeViewlet'),
-          this.contextKeyValue('listMultiSelection'),
           this.contextKeyValue('isFileSystemResource'),
         ])
       const isTrue = value => value === true || value === 'true'
@@ -734,12 +737,11 @@ class FastBridge {
         // requested current-resource fallback for those editors only.
         if (!vscode.window.activeTextEditor && activeResourcePath &&
           await this.isRegularFilePath(activeResourcePath)) {
-          return {handled: true, path: activeResourcePath}
+          return this.resourcePathResult([activeResourcePath])
         }
         return {handled: false}
       }
-      if (isTrue(isMultiSelection) ||
-        isFileSystemResource === false || isFileSystemResource === 'false') {
+      if (isFileSystemResource === false || isFileSystemResource === 'false') {
         return {handled: false}
       }
     }
@@ -759,9 +761,17 @@ class FastBridge {
         // built-in command does not update the clipboard for a resource.
         await vscode.env.clipboard.writeText('')
         await vscode.commands.executeCommand(command)
-        copiedPath = this.contextResourcePath(await vscode.env.clipboard.readText())
-        if (copiedPath && await this.isExistingResourcePath(copiedPath)) {
-          return {handled: true, path: copiedPath}
+        const copiedPaths = (await vscode.env.clipboard.readText())
+          .split(/\r?\n/)
+          .map(value => this.contextResourcePath(value))
+          .filter(Boolean)
+        const existingPaths = []
+        for (const candidate of copiedPaths) {
+          if (await this.isExistingResourcePath(candidate)) existingPaths.push(candidate)
+        }
+        copiedPath = existingPaths[0] || ''
+        if (existingPaths.length > 0) {
+          return this.resourcePathResult(existingPaths)
         }
       } catch (error) {
         // Preserve the existing Fast Ctrl+Shift+C behavior when the command
@@ -783,9 +793,16 @@ class FastBridge {
     if (activeResourcePath &&
       ((explorerFocused && await this.isExistingResourcePath(activeResourcePath)) ||
         await this.isRegularFilePath(activeResourcePath))) {
-      return {handled: true, path: activeResourcePath}
+      return this.resourcePathResult([activeResourcePath])
     }
     return {handled: false}
+  }
+
+  resourcePathResult(paths) {
+    const uniquePaths = [...new Set(paths)]
+    return uniquePaths.length === 1
+      ? {handled: true, path: uniquePaths[0], paths: uniquePaths}
+      : {handled: true, paths: uniquePaths}
   }
 
   contextResourcePath(value) {

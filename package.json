@@ -2,7 +2,7 @@
     "name": "scs",
     "displayName": "fast-bridge",
     "description": "shortcut",
-    "version": "0.1.23",
+    "version": "0.1.33",
     "license": "MIT",
     "engines": {
         "vscode": "^1.70.0"
@@ -90,7 +90,7 @@
             {
                 "command": "fastBridge.copySelectedResourcePath",
                 "key": "ctrl+shift+c",
-                "when": "explorerViewletVisible && filesExplorerFocus && !inputFocus && !listMultiSelection && isFileSystemResource"
+                "when": "explorerViewletVisible && filesExplorerFocus && !inputFocus && isFileSystemResource"
             },
             {
                 "command": "extension.beautifyScs",

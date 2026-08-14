@@ -4,9 +4,11 @@
 
 ## Fast Bridge
 
+在 VS Code 的 Files Explorer 中选中一个或多个文件/目录并按 `Ctrl+Shift+C` 时，插件会复制全部资源路径。WebSocket 命令 `command.copyResourcePath` 在 `data.paths` 返回全部绝对路径；单选时还保留兼容字段 `data.path`。
+
 插件启动后默认连接 `ws://127.0.0.1:19900`，协议兼容 Fast Idea Bridge。它会上报当前工作区、文件、文本输入光标、选区及多光标状态，并支持服务端发起状态查询、文件导航、文本选择、查找、编辑器聚焦、编辑器全屏和资源管理器文件路径复制命令。
 
-状态快照中的 `payload.activeEditor.context` 表示光标最内层的通用语法上下文，`expressionContext` 提供表达式/成员信息；`command.queryPythonPackages` 按需批量查询目标工作区解释器中的指定包。`payload.fullScreen` 表示 VS Code 是否全屏；`payload.editorOpenedAt` 是当前编辑器打开时间的 Unix 毫秒时间戳。握手 payload 也包含这些全屏判断字段，总服务只在 `bridge.hello` 时执行一次自动全屏判断。`command.fullScreen` 会幂等地执行 `workbench.action.toggleFullScreen`，已全屏或状态未知时不会切换。
+状态快照中的 `payload.activeEditor.context` 表示光标最内层的通用语法上下文，`expressionContext` 提供表达式/成员信息；`command.queryPythonPackages` 按需批量查询目标工作区解释器中的指定包。`payload.fullScreen` 表示 VS Code 是否全屏；`payload.editorOpenedAt` 是当前编辑器打开时间的 Unix 毫秒时间戳。`command.isFullScreen` 会重新查询当前窗口的全屏状态，返回 `data.fullScreen` 的 `true`、`false` 或未知的 `null`。自动全屏会在握手后查询，确认未全屏才发送 `command.fullScreen`，并在切换后再次查询确认；宿主尚未就绪时会在编辑器打开后的 30 秒内重试。`command.fullScreen` 会幂等地执行 `workbench.action.toggleFullScreen`。
 
 在 VS Code 的 Files Explorer（文件资源管理器）中选中一个文件或目录并按 `Ctrl+Shift+C` 时，会复制该资源的路径；多选或焦点不在 Files Explorer 时，不匹配这条快捷键，继续执行 Fast 原有的 Ctrl+Shift+C 逻辑。
 
