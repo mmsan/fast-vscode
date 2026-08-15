@@ -612,6 +612,14 @@ class FastBridge {
     return editor.selection.isEmpty ? '' : editor.document.getText(editor.selection)
   }
 
+  async currentLineContent() {
+    const editor = vscode.window.activeTextEditor
+    if (!editor || !this.settings().sendText) return null
+    const snapshot = await this.snapshot()
+    if (snapshot.focus?.type !== 'editor' || snapshot.activeEditor?.ownsFocus !== true) return null
+    return editor.document.lineAt(editor.selection.active.line).text
+  }
+
   async currentInputable() {
     return isInputable(await this.snapshot())
   }
@@ -785,6 +793,7 @@ class FastBridge {
       else if (type === 'command.getContext') data = await this.currentContext()
       else if (type === 'command.getObjectInfo') data = await this.currentObjectInfo()
       else if (type === 'command.getSelectedText') data = await this.currentSelectedText()
+      else if (type === 'command.getCurrentLineContent') data = await this.currentLineContent()
       else if (type === 'command.isFullScreen') data = await this.isFullScreen()
       else if (type === 'command.listProjects') data = this.projects()
       else if (type === 'command.queryPythonPackages') data = await this.queryPythonPackages(message.payload || {}, target)
