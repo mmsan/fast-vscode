@@ -235,7 +235,36 @@ function statusFromSnapshot(snapshot) {
 }
 
 function statusSignature(status) {
-  return JSON.stringify({inputable: status.inputable, objectInfo: status.objectInfo})
+  return JSON.stringify({
+    inputable: status.inputable,
+    focus: {
+      type: status.focus?.type || 'none',
+      className: status.focus?.className || '',
+      ownsFocus: status.activeEditor?.ownsFocus === true,
+    },
+    objectInfo: status.objectInfo,
+  })
+}
+
+const focusContextKeys = [
+  'editorFocus',
+  'editorTextFocus',
+  'inputFocus',
+  'textInputFocus',
+  'findInputFocus',
+  'searchInputBoxFocus',
+  'filesExplorerFocus',
+  'explorerViewletFocus',
+  'sideBarFocus',
+  'activeViewlet',
+]
+
+function contextKeyIsTrue(value) {
+  return value === true || value === 'true'
+}
+
+function contextKeyIsKnown(value) {
+  return value !== undefined && value !== null
 }
 
 class FastBridge {
@@ -250,6 +279,8 @@ class FastBridge {
     this.editorOpenedKey = null
     this.editorOpenedAt = 0
     this.pendingStatus = null
+    this.statusInFlight = null
+    this.focusPoll = null
     this.lastStatusSignature = null
     this.output = this.createOutputChannel()
     this.logDirectory = (this.context.logUri || this.context.globalStorageUri || this.context.storageUri)?.fsPath || ''
@@ -316,6 +347,7 @@ class FastBridge {
     this.generation++
     this.reconnectAttempt = 0
     this.log('settings changed; reconnecting')
+    this.stopFocusPolling()
     if (this.socket) this.socket.close(1000, 'settings changed')
     this.socket = null
     if (!this.disposed && this.settings().autoConnect) this.connect()
@@ -348,6 +380,7 @@ class FastBridge {
       this.send('bridge.hello', await this.identity())
       this.schedule('editor.state', 0)
       this.scheduleStatus(0)
+      this.startFocusPolling()
     })
     socket.on('message', data => {
       if (data.length > 1024 * 1024) return socket.close(1009, 'message too large')
@@ -355,7 +388,10 @@ class FastBridge {
     })
     socket.on('error', error => this.recordConnectionFailure(error))
     socket.on('close', (code, reason) => {
-      if (this.socket === socket) this.socket = null
+      if (this.socket === socket) {
+        this.socket = null
+        this.stopFocusPolling()
+      }
       if (this.disposed || generation !== this.generation || !this.settings().autoConnect) return
       if (opened) this.log(`connection closed; code=${code}; reason=${reason?.toString() || ''}`)
       const delays = [200, 500, 1000, 2000]
@@ -432,16 +468,45 @@ class FastBridge {
   scheduleStatus(delay) {
     clearTimeout(this.pendingStatus)
     this.pendingStatus = setTimeout(async () => {
+      this.pendingStatus = null
       try {
-        const status = statusFromSnapshot(await this.snapshot())
-        const signature = statusSignature(status)
-        if (signature === this.lastStatusSignature) return
-        this.lastStatusSignature = signature
-        this.send('editor.statusChanged', status)
+        await this.publishStatus()
       } catch (error) {
         this.log(`读取当前编辑器状态失败：${error.message}`, 'warn')
       }
     }, delay)
+  }
+
+  async publishStatus() {
+    if (this.statusInFlight) return this.statusInFlight
+    const task = (async () => {
+      const status = statusFromSnapshot(await this.snapshot())
+      const signature = statusSignature(status)
+      if (signature === this.lastStatusSignature) return
+      this.lastStatusSignature = signature
+      this.send('editor.statusChanged', status)
+    })()
+    this.statusInFlight = task
+    try {
+      return await task
+    } finally {
+      if (this.statusInFlight === task) this.statusInFlight = null
+    }
+  }
+
+  startFocusPolling() {
+    this.stopFocusPolling()
+    this.focusPoll = setInterval(() => {
+      if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return
+      this.publishStatus().catch(error => {
+        this.log(`读取当前编辑器焦点失败：${error.message}`, 'warn')
+      })
+    }, 500)
+  }
+
+  stopFocusPolling() {
+    clearInterval(this.focusPoll)
+    this.focusPoll = null
   }
 
   async snapshot() {
@@ -459,19 +524,83 @@ class FastBridge {
           : {}),
       }
       : null
-    const fullScreen = (await this.isFullScreen()).fullScreen
-    return {
-      focus: editor
+    const [fullScreenState, focusContext] = await Promise.all([
+      this.isFullScreen(),
+      this.focusContext(),
+    ])
+    const fullScreen = fullScreenState.fullScreen
+    const hasEditorFocus = editor
+      ? focusContext.known ? focusContext.editorFocused : true
+      : false
+    const focus = editor
+      ? hasEditorFocus
         ? { type: 'editor', className: 'vscode.TextEditor', enabled: true, visible: true, showing: true }
-        : resource
-          ? { type: 'editor', className: 'vscode.ResourceEditor', enabled: true, visible: true, showing: true }
-          : { type: 'none' },
-      activeEditor: editor ? await this.describe(editor) : resource ? this.describeResource(resource) : null,
+        : focusContext.inputFocused
+          ? this.textInputFocus()
+          : this.componentFocus(focusContext)
+      : resource
+        ? focusContext.inputFocused
+          ? this.textInputFocus()
+          : { type: 'editor', className: 'vscode.ResourceEditor', enabled: true, visible: true, showing: true }
+        : focusContext.inputFocused
+          ? this.textInputFocus()
+          : { type: 'none' }
+    return {
+      focus,
+      activeEditor: editor
+        ? await this.describe(editor, hasEditorFocus)
+        : resource ? this.describeResource(resource, !focusContext.known || focusContext.editorFocused) : null,
       activeResource,
       editorOpenedAt,
       // An unavailable context key is unknown, not "not fullscreen". Treating
       // it as false would make the toggle command shrink the window.
       fullScreen,
+    }
+  }
+
+  async focusContext() {
+    const values = await Promise.all(focusContextKeys.map(key => this.contextKeyValue(key)))
+    const context = Object.fromEntries(focusContextKeys.map((key, index) => [key, values[index]]))
+    const inputFocused = [
+      context.inputFocus,
+      context.textInputFocus,
+      context.findInputFocus,
+      context.searchInputBoxFocus,
+    ].some(contextKeyIsTrue)
+    const explorerFocused = [
+      context.filesExplorerFocus,
+      context.explorerViewletFocus,
+    ].some(contextKeyIsTrue) ||
+      contextKeyIsTrue(context.sideBarFocus) && context.activeViewlet === 'workbench.view.explorer'
+    const sidebarFocused = contextKeyIsTrue(context.sideBarFocus)
+    const editorFocusKnown = contextKeyIsKnown(context.editorFocus) ||
+      contextKeyIsKnown(context.editorTextFocus)
+    const known = editorFocusKnown || focusContextKeys.some(key => contextKeyIsKnown(context[key]))
+    const editorFocused = editorFocusKnown
+      ? (contextKeyIsTrue(context.editorFocus) || contextKeyIsTrue(context.editorTextFocus)) &&
+        !inputFocused && !sidebarFocused && !explorerFocused
+      : !inputFocused && !sidebarFocused && !explorerFocused
+    return {known, editorFocused, inputFocused, explorerFocused}
+  }
+
+  textInputFocus() {
+    return {
+      type: 'textInput',
+      className: 'vscode.InputBox',
+      enabled: true,
+      visible: true,
+      showing: true,
+      input: {editable: true},
+    }
+  }
+
+  componentFocus(focusContext) {
+    return {
+      type: 'component',
+      className: focusContext.explorerFocused ? 'vscode.FilesExplorer' : 'vscode.Component',
+      enabled: true,
+      visible: true,
+      showing: true,
     }
   }
 
@@ -519,12 +648,12 @@ class FastBridge {
     }
   }
 
-  describeResource(uri) {
+  describeResource(uri, ownsFocus = true) {
     const folder = vscode.workspace.getWorkspaceFolder(uri)
     const filePath = uri.scheme === 'file' ? uri.fsPath : ''
     const name = path.basename(filePath || uri.path || uri.toString())
     return {
-      ownsFocus: true,
+      ownsFocus,
       editable: false,
       file: {
         name,
@@ -551,7 +680,7 @@ class FastBridge {
     }
   }
 
-  async describe(editor) {
+  async describe(editor, ownsFocus = true) {
     const document = editor.document
     const selection = editor.selection
     const folder = vscode.workspace.getWorkspaceFolder(document.uri)
@@ -564,7 +693,7 @@ class FastBridge {
     }
     if (settings.sendText) selected.text = document.getText(selection)
     const result = {
-      ownsFocus: true,
+      ownsFocus,
       editable: !document.isClosed,
       file: {
         name: path.basename(document.uri.fsPath),
@@ -1003,6 +1132,7 @@ class FastBridge {
     this.generation++
     clearTimeout(this.pending)
     clearTimeout(this.pendingStatus)
+    this.stopFocusPolling()
     if (this.socket) this.socket.close(1000, 'plugin disposed')
     this.socket = null
   }
