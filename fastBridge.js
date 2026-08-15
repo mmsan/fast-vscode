@@ -485,9 +485,12 @@ class FastBridge {
     return isInputable(await this.snapshot())
   }
 
-  async currentContext() {
-    return (await this.snapshot()).activeEditor?.context ?? null
-  }
+ async currentContext() {
+    const editor = vscode.window.activeTextEditor
+    if (!editor) return null
+    const offset = editor.document.offsetAt(editor.selection.active)
+    return syntaxContextAt(editor.document.getText(), offset, editor.document.languageId)
+ }
 
   async currentObjectInfo() {
     return objectInfo((await this.snapshot()).activeEditor)
