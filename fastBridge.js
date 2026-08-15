@@ -145,6 +145,43 @@ function hoverType(hover) {
   return (match ? match[1] : line).trim().replace(/^\([^)]*\)\s*/, '')
 }
 
+function hoverInfo(hover) {
+  const values = []
+  for (const item of hover?.contents || []) values.push(typeof item === 'string' ? item : item?.value || '')
+  const text = values.join('\n').replace(/```[^\n]*\n?|```/g, '').trim()
+  if (!text) return {}
+  const line = text.split(/\r?\n/).find(value => /[:()]|\b(class|interface|function|method|property)\b/i.test(value)) || text.split(/\r?\n/)[0]
+  const method = line.match(/\)\s*(?::|->)\s*([^\n]+)/)
+  const type = hoverType(hover)
+  const result = {}
+  if (type) result.type = type
+  if (method) {
+    result.kind = 'method'
+    result.returnType = method[1].trim()
+    result.type = result.returnType
+  } else if (/\b(property|field)\b/i.test(line)) {
+    result.kind = 'property'
+  } else if (/\b(class|interface|type)\b/i.test(line)) {
+    result.kind = 'type'
+  }
+  return result
+}
+
+function completionSignature(detail) {
+  if (typeof detail !== 'string' || !detail.trim()) return {}
+  const text = detail.replace(/```[^\n]*\n?|```/g, '').trim()
+  const result = {}
+  const method = text.match(/\(([^)]*)\)\s*(?::|->)\s*([^\n]+)/)
+  if (method) {
+    result.returnType = method[2].trim()
+    result.parameters = method[1].split(',').map(value => value.trim()).filter(Boolean).map(value => {
+      const match = value.match(/^([^:]+):\s*(.+)$/)
+      return match ? {name: match[1].trim(), type: match[2].trim()} : {name: value}
+    })
+  }
+  return result
+}
+
 function completionMembers(completion) {
   const result = []
   const seen = new Set()
@@ -154,10 +191,51 @@ function completionMembers(completion) {
     seen.add(name)
     const kind = {2: 'method', 3: 'method', 4: 'method', 5: 'property', 6: 'variable', 7: 'type', 8: 'type', 10: 'property'}[item.kind] || 'member'
     const member = {name, kind}
-    if (typeof item.detail === 'string' && item.detail.trim()) member.type = item.detail.trim()
+    const signature = completionSignature(item.detail)
+    if (kind === 'method') {
+      if (signature.returnType) member.returnType = signature.returnType
+      if (signature.parameters?.length) member.parameters = signature.parameters
+      if (signature.returnType) member.type = signature.returnType
+    } else if (typeof item.detail === 'string' && item.detail.trim()) {
+      member.type = item.detail.trim()
+    }
     result.push(member)
   }
   return result
+}
+
+function objectInfo(activeEditor) {
+  if (!activeEditor) return null
+  return {
+    project: activeEditor.project || null,
+    file: activeEditor.file || null,
+    context: activeEditor.context || 'none',
+    expressionContext: activeEditor.expressionContext || null,
+  }
+}
+
+function isInputable(snapshot) {
+  const focus = snapshot?.focus
+  const editor = snapshot?.activeEditor
+  const available = !!focus && focus.enabled !== false &&
+    focus.visible !== false && focus.showing !== false
+  return available && (
+    focus.type === 'textInput' && focus.input?.editable === true ||
+    focus.type === 'editor' && editor?.ownsFocus === true && editor?.editable === true
+  )
+}
+
+function statusFromSnapshot(snapshot) {
+  return {
+    inputable: isInputable(snapshot),
+    focus: snapshot?.focus || {type: 'none'},
+    activeEditor: snapshot?.activeEditor || null,
+    objectInfo: objectInfo(snapshot?.activeEditor),
+  }
+}
+
+function statusSignature(status) {
+  return JSON.stringify({inputable: status.inputable, objectInfo: status.objectInfo})
 }
 
 class FastBridge {
@@ -171,6 +249,8 @@ class FastBridge {
     this.connectionFailures = 0
     this.editorOpenedKey = null
     this.editorOpenedAt = 0
+    this.pendingStatus = null
+    this.lastStatusSignature = null
     this.output = this.createOutputChannel()
     this.logDirectory = (this.context.logUri || this.context.globalStorageUri || this.context.storageUri)?.fsPath || ''
   }
@@ -186,11 +266,20 @@ class FastBridge {
   async start() {
     this.context.subscriptions.push(
       this.output,
-      vscode.window.onDidChangeActiveTextEditor(() => this.schedule('focus.changed', 0)),
-      vscode.window.tabGroups.onDidChangeTabs(() => this.schedule('focus.changed', 0)),
-      vscode.window.tabGroups.onDidChangeTabGroups(() => this.schedule('focus.changed', 0)),
-      vscode.window.onDidChangeTextEditorSelection(() => this.schedule('editor.caretChanged', 40)),
-      vscode.workspace.onDidChangeTextDocument(() => this.schedule('editor.documentChanged', 100)),
+      vscode.window.onDidChangeActiveTextEditor(() => {
+        this.schedule('focus.changed', 0)
+        this.scheduleStatus(0)
+      }),
+      vscode.window.tabGroups.onDidChangeTabs(() => {
+        this.schedule('focus.changed', 0)
+        this.scheduleStatus(0)
+      }),
+      vscode.window.tabGroups.onDidChangeTabGroups(() => {
+        this.schedule('focus.changed', 0)
+        this.scheduleStatus(0)
+      }),
+      vscode.window.onDidChangeTextEditorSelection(() => this.scheduleStatus(40)),
+      vscode.workspace.onDidChangeTextDocument(() => this.scheduleStatus(100)),
       vscode.workspace.onDidChangeWorkspaceFolders(() => this.reconnect()),
       vscode.workspace.onDidChangeConfiguration(event => event.affectsConfiguration('fastBridge') && this.reconnect()),
       vscode.commands.registerCommand('fastBridge.reconnect', () => this.reconnect()),
@@ -251,12 +340,14 @@ class FastBridge {
       this.socket = socket
       this.connectionId = uuid()
       this.reconnectAttempt = 0
+      this.lastStatusSignature = null
       opened = true
       const failures = this.connectionFailures
       this.connectionFailures = 0
       this.log(`connected${failures > 0 ? `; recoveredAfterFailures=${failures}` : ''}`)
       this.send('bridge.hello', await this.identity())
       this.schedule('editor.state', 0)
+      this.scheduleStatus(0)
     })
     socket.on('message', data => {
       if (data.length > 1024 * 1024) return socket.close(1009, 'message too large')
@@ -293,7 +384,7 @@ class FastBridge {
       fullScreen: snapshot.fullScreen,
       editorOpenedAt: snapshot.editorOpenedAt,
       activeProject: snapshot.activeEditor?.project || null,
-      capabilities: ['state', 'navigate', 'select', 'find', 'requestFocus', 'fullScreen', 'isFullScreen', 'listProjects', 'copyResourcePath', 'pythonPackages'],
+      capabilities: ['state', 'getInputable', 'getObjectInfo', 'getSelectedText', 'navigate', 'select', 'find', 'requestFocus', 'fullScreen', 'isFullScreen', 'listProjects', 'copyResourcePath', 'pythonPackages'],
     }
   }
 
@@ -338,6 +429,21 @@ class FastBridge {
     }, delay)
   }
 
+  scheduleStatus(delay) {
+    clearTimeout(this.pendingStatus)
+    this.pendingStatus = setTimeout(async () => {
+      try {
+        const status = statusFromSnapshot(await this.snapshot())
+        const signature = statusSignature(status)
+        if (signature === this.lastStatusSignature) return
+        this.lastStatusSignature = signature
+        this.send('editor.statusChanged', status)
+      } catch (error) {
+        this.log(`读取当前编辑器状态失败：${error.message}`, 'warn')
+      }
+    }, delay)
+  }
+
   async snapshot() {
     const editor = vscode.window.activeTextEditor
     const resource = editor ? editor.document.uri : await this.activeResourceUri()
@@ -367,6 +473,20 @@ class FastBridge {
       // it as false would make the toggle command shrink the window.
       fullScreen,
     }
+  }
+
+  async currentSelectedText() {
+    const editor = vscode.window.activeTextEditor
+    if (!editor || !this.settings().sendText) return null
+    return editor.selection.isEmpty ? '' : editor.document.getText(editor.selection)
+  }
+
+  async currentInputable() {
+    return isInputable(await this.snapshot())
+  }
+
+  async currentObjectInfo() {
+    return objectInfo((await this.snapshot()).activeEditor)
   }
 
   getEditorOpenedAt(editor, resource) {
@@ -494,15 +614,17 @@ class FastBridge {
         vscode.commands.executeCommand('vscode.executeHoverProvider', editor.document.uri, editor.selection.active),
         vscode.commands.executeCommand('vscode.executeCompletionItemProvider', editor.document.uri, editor.selection.active),
       ])
-      const type = hoverType(hover)
-      if (type) expressionContext.type = type
+      const info = hoverInfo(hover)
+      if (info.kind) expressionContext.kind = info.kind
+      if (info.type) expressionContext.type = info.type
+      if (info.returnType) expressionContext.returnType = info.returnType
       const members = completionMembers(completion)
       if (members.length) expressionContext.members = members
     } catch (error) {
       // Language-service providers are optional. The generic expression still
       // remains useful when a language extension is unavailable or busy.
     }
-    return { expressionContext }
+    return { ...context, expressionContext }
   }
 
   async handle(raw) {
@@ -521,6 +643,9 @@ class FastBridge {
       let data
       if (type === 'command.ping') data = undefined
       else if (type === 'command.getState') data = await this.snapshot()
+      else if (type === 'command.getInputable') data = await this.currentInputable()
+      else if (type === 'command.getObjectInfo') data = await this.currentObjectInfo()
+      else if (type === 'command.getSelectedText') data = await this.currentSelectedText()
       else if (type === 'command.isFullScreen') data = await this.isFullScreen()
       else if (type === 'command.listProjects') data = this.projects()
       else if (type === 'command.queryPythonPackages') data = await this.queryPythonPackages(message.payload || {}, target)
@@ -869,6 +994,7 @@ class FastBridge {
     this.disposed = true
     this.generation++
     clearTimeout(this.pending)
+    clearTimeout(this.pendingStatus)
     if (this.socket) this.socket.close(1000, 'plugin disposed')
     this.socket = null
   }
