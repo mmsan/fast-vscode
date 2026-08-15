@@ -2,7 +2,7 @@
     "name": "scs",
     "displayName": "fast-bridge",
     "description": "shortcut",
-    "version": "0.1.33",
+    "version": "0.1.45",
     "license": "MIT",
     "engines": {
         "vscode": "^1.70.0"

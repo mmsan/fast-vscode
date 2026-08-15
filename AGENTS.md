@@ -37,6 +37,8 @@ node --check D:\v\fast\utils\f.mjs
 
 ## Local package publishing
 
+Local publication or installation is an explicit user-authorized action, not a default verification step. After ordinary code changes, use syntax checks and package-only verification (`-SkipInstall`). Do not install the VSIX, bump a release solely for publication, or run the publishing workflow without `-SkipInstall` unless the user explicitly asks to publish locally, release a version, install it, or uses equivalent wording. A request to modify, fix, build, test, or verify does not authorize publication.
+
 For a normal local release:
 
 ```powershell
