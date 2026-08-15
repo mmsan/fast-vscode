@@ -384,7 +384,7 @@ class FastBridge {
       fullScreen: snapshot.fullScreen,
       editorOpenedAt: snapshot.editorOpenedAt,
       activeProject: snapshot.activeEditor?.project || null,
-      capabilities: ['state', 'getInputable', 'getObjectInfo', 'getSelectedText', 'navigate', 'select', 'find', 'requestFocus', 'fullScreen', 'isFullScreen', 'listProjects', 'copyResourcePath', 'pythonPackages'],
+      capabilities: ['state', 'getInputable', 'getContext', 'getObjectInfo', 'getSelectedText', 'navigate', 'select', 'find', 'requestFocus', 'fullScreen', 'isFullScreen', 'listProjects', 'copyResourcePath', 'pythonPackages'],
     }
   }
 
@@ -483,6 +483,10 @@ class FastBridge {
 
   async currentInputable() {
     return isInputable(await this.snapshot())
+  }
+
+  async currentContext() {
+    return (await this.snapshot()).activeEditor?.context ?? null
   }
 
   async currentObjectInfo() {
@@ -644,6 +648,7 @@ class FastBridge {
       if (type === 'command.ping') data = undefined
       else if (type === 'command.getState') data = await this.snapshot()
       else if (type === 'command.getInputable') data = await this.currentInputable()
+      else if (type === 'command.getContext') data = await this.currentContext()
       else if (type === 'command.getObjectInfo') data = await this.currentObjectInfo()
       else if (type === 'command.getSelectedText') data = await this.currentSelectedText()
       else if (type === 'command.isFullScreen') data = await this.isFullScreen()
