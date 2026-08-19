@@ -607,8 +607,6 @@ class FastBridge {
   async currentSelectedText() {
     const editor = vscode.window.activeTextEditor
     if (!editor || !this.settings().sendText) return null
-    const snapshot = await this.snapshot()
-    if (snapshot.focus?.type !== 'editor' || snapshot.activeEditor?.ownsFocus !== true) return null
     return editor.selection.isEmpty ? '' : editor.document.getText(editor.selection)
   }
 
