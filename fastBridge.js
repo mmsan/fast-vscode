@@ -9,6 +9,11 @@ const WebSocket = require('ws')
 const uuid = () => crypto.randomUUID()
 const execFileAsync = promisify(execFile)
 const pythonPackageName = /^[A-Za-z_][A-Za-z0-9_.-]*$/
+const slowReconnectAfterMs = 5 * 60 * 1000
+const slowReconnectDelayMs = 6000
+const connectionLogIntervalMs = 60 * 1000
+const maxLogFileBytes = 5 * 1024 * 1024
+const logBackupCount = 2
 const compactLogText = value => {
   if (value === undefined || value === null || !String(value).trim()) return ''
   const text = String(value).replace(/bearer\s+\S+/ig, 'Bearer <redacted>').replace(/[\r\n]+/g, ' ').trim()
@@ -276,6 +281,9 @@ class FastBridge {
     this.generation = 0
     this.reconnectAttempt = 0
     this.connectionFailures = 0
+    this.reconnectStartedAt = 0
+    this.slowReconnectLogged = false
+    this.connectionLogStates = new Map()
     this.editorOpenedKey = null
     this.editorOpenedAt = 0
     this.pendingStatus = null
@@ -346,6 +354,8 @@ class FastBridge {
   reconnect() {
     this.generation++
     this.reconnectAttempt = 0
+    this.reconnectStartedAt = 0
+    this.slowReconnectLogged = false
     this.log('settings changed; reconnecting')
     this.stopFocusPolling()
     if (this.socket) this.socket.close(1000, 'settings changed')
@@ -372,6 +382,8 @@ class FastBridge {
       this.socket = socket
       this.connectionId = uuid()
       this.reconnectAttempt = 0
+      this.reconnectStartedAt = 0
+      this.slowReconnectLogged = false
       this.lastStatusSignature = null
       opened = true
       const failures = this.connectionFailures
@@ -393,20 +405,41 @@ class FastBridge {
         this.stopFocusPolling()
       }
       if (this.disposed || generation !== this.generation || !this.settings().autoConnect) return
-      if (opened) this.log(`connection closed; code=${code}; reason=${reason?.toString() || ''}`)
+      if (opened) this.logConnectionEvent('closed', `connection closed; code=${code}; reason=${reason?.toString() || ''}`)
       const delays = [200, 500, 1000, 2000]
       const attempt = this.reconnectAttempt++
-      const delay = delays[Math.min(attempt, delays.length - 1)]
-      if (attempt < 3 || (attempt + 1) % 10 === 0) this.log(`reconnect scheduled; delayMs=${delay}`)
+      if (!this.reconnectStartedAt) this.reconnectStartedAt = Date.now()
+      const retryingForMs = Date.now() - this.reconnectStartedAt
+      const delay = retryingForMs >= slowReconnectAfterMs
+        ? slowReconnectDelayMs
+        : delays[Math.min(attempt, delays.length - 1)]
+      if (delay === slowReconnectDelayMs && !this.slowReconnectLogged) {
+        this.slowReconnectLogged = true
+        this.log(`connection remains unavailable for ${Math.floor(retryingForMs / 1000)}s; retry delay increased to ${slowReconnectDelayMs}ms`, 'warn')
+      }
       setTimeout(() => generation === this.generation && this.connect(), delay)
     })
   }
 
   recordConnectionFailure(error) {
     const count = ++this.connectionFailures
-    if (count <= 3 || count % 10 === 0) {
-      this.log(`connection failed; attempt=${count}; ${error?.message || error}`, 'warn')
+    this.logConnectionEvent('failure', `connection failed; attempt=${count}; ${error?.message || error}`, 'warn')
+  }
+
+  logConnectionEvent(kind, text, level = 'warn') {
+    const now = Date.now()
+    const state = this.connectionLogStates.get(kind) || { count: 0, lastAt: 0, suppressed: 0 }
+    state.count++
+    const shouldLog = state.count <= 3 || now - state.lastAt >= connectionLogIntervalMs
+    if (shouldLog) {
+      const suffix = state.suppressed > 0 ? `; suppressed=${state.suppressed}` : ''
+      state.lastAt = now
+      state.suppressed = 0
+      this.log(`${text}${suffix}`, level)
+    } else {
+      state.suppressed++
     }
+    this.connectionLogStates.set(kind, state)
   }
 
   async identity() {
@@ -1120,7 +1153,7 @@ class FastBridge {
       fs.mkdirSync(this.logDirectory, { recursive: true })
       const cutoff = Date.now() - 3 * 24 * 60 * 60 * 1000
       for (const name of fs.readdirSync(this.logDirectory)) {
-        if (!/^fast-vscode-bridge-\d{4}-\d{2}-\d{2}\.log$/.test(name)) continue
+        if (!/^fast-vscode-bridge-\d{4}-\d{2}-\d{2}\.log(?:\.\d+)?$/.test(name)) continue
         const file = path.join(this.logDirectory, name)
         try {
           if (fs.statSync(file).mtimeMs < cutoff) fs.unlinkSync(file)
@@ -1129,7 +1162,17 @@ class FastBridge {
         }
       }
       const name = `fast-vscode-bridge-${new Date().toISOString().slice(0, 10)}.log`
-      fs.appendFileSync(path.join(this.logDirectory, name), `${line}\n`, 'utf8')
+      const file = path.join(this.logDirectory, name)
+      if (fs.existsSync(file) && fs.statSync(file).size + Buffer.byteLength(line, 'utf8') + 1 > maxLogFileBytes) {
+        const oldest = `${file}.${logBackupCount}`
+        if (fs.existsSync(oldest)) fs.unlinkSync(oldest)
+        for (let index = logBackupCount - 1; index >= 1; index--) {
+          const source = `${file}.${index}`
+          if (fs.existsSync(source)) fs.renameSync(source, `${file}.${index + 1}`)
+        }
+        fs.renameSync(file, `${file}.1`)
+      }
+      fs.appendFileSync(file, `${line}\n`, 'utf8')
     } catch (error) {
       // The host LogOutputChannel remains the fallback when the file cannot be written.
     }
