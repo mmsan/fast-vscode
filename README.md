@@ -4,11 +4,11 @@
 
 ## Fast Bridge
 
-三个插件都支持通过 `command.getSelectedText` 主动读取当前编辑器选中文本，并通过 `command.getCurrentLineContent` 读取当前代码行；Fast 端快捷调用分别为 `await f.editorBridge.getCurrentSelectedText()` 和 `await f.editorBridge.getCurrentLineContent()`。没有选择时前者返回空字符串，关闭 `fastBridge.sendText` 或没有活动编辑器时返回 `null`。VS Code 的查询框等非编辑器输入框会被识别为输入焦点；由于 VS Code 扩展 API 不直接暴露内置查询框的选区文本，`ctrlC()` 会在主动读取返回 `null` 时回退到原生 Ctrl+C，从而继续获取该输入框中的选中内容。
+三个插件都支持通过 `command.getSelectedText` 主动读取当前编辑器选中文本，并通过 `command.getCurrentLineContent` 读取当前代码行；Fast 端快捷调用分别为 `await f.editorBridge.getCurrentSelectedText()` 和 `await f.editorBridge.getCurrentLineContent()`。选区结果和上次主动读取不同时会立即返回；相同时插件会在 80 毫秒后复读一次并返回最新结果。没有选择时前者返回空字符串，关闭 `fastBridge.sendText` 或没有活动编辑器时返回 `null`。VS Code 的查询框等非编辑器输入框会被识别为输入焦点；由于 VS Code 扩展 API 不直接暴露内置查询框的选区文本，`ctrlC()` 会在主动读取返回 `null` 时回退到原生 Ctrl+C，从而继续获取该输入框中的选中内容。
 
 在 VS Code 的 Files Explorer 中选中一个或多个文件/目录并按 `Ctrl+Shift+C` 时，插件会复制全部资源路径。WebSocket 命令 `command.copyResourcePath` 在 `data.paths` 返回全部绝对路径；单选时还保留兼容字段 `data.path`。
 
-插件启动后默认连接 `ws://127.0.0.1:19900`，协议兼容 Fast Idea Bridge。它会上报当前工作区、文件、文本输入光标、选区及多光标状态，并支持服务端发起状态查询、文件导航、文本选择、查找、编辑器聚焦、编辑器全屏和资源管理器文件路径复制命令。
+插件启动后默认连接 `ws://127.0.0.1:19900`，协议兼容 Fast Idea Bridge。它会上报当前工作区、文件、文本输入光标、选区及多光标状态，并支持服务端发起状态查询、文件导航、文本选择、查找、编辑器聚焦、编辑器全屏和资源管理器文件路径复制命令。查找通常限制在当前工作区内；当前已经作为文本编辑器文档打开的临时文件可按其精确路径查找，未打开的工作区外文件仍会被拒绝。
 
 状态快照中的 `payload.activeEditor.context` 表示光标最内层的通用语法上下文，`expressionContext` 提供表达式、对象类型、方法返回值、参数和成员信息；VS Code 通过 Hover 和 Completion Provider 尽力解析这些字段，方法成员同时提供 `returnType` 和兼容的 `type`。`editor.statusChanged` 只在输入能力或当前对象信息变化时发送，不再发送高频的 `editor.caretChanged` 和 `editor.documentChanged`。`command.getInputable`、`command.getContext`、`command.getObjectInfo`、`command.getSelectedText` 和 `command.getCurrentLineContent` 可主动读取当前状态，对应 Fast 端调用为 `await f.editorBridge.getCurrentInputable()`、`await f.editorBridge.getCurrentContext()`、`await f.editorBridge.getCurrentObjectInfo()`、`await f.editorBridge.getCurrentSelectedText()` 和 `await f.editorBridge.getCurrentLineContent()`。`command.getContext` 返回 `singleQuote`、`doubleQuote`、`backtick`、`parentheses`、`braces` 或 `none`；没有活动编辑器时返回 `null`。`command.queryPythonPackages` 按需批量查询目标工作区解释器中的指定包。`payload.fullScreen` 表示 VS Code 是否全屏；`payload.editorOpenedAt` 是当前编辑器打开时间的 Unix 毫秒时间戳。`command.isFullScreen` 会重新查询当前窗口的全屏状态，返回 `data.fullScreen` 的 `true`、`false` 或未知的 `null`。自动全屏会在握手后查询，确认未全屏才发送 `command.fullScreen`，并在切换后再次查询确认；宿主尚未就绪时会在编辑器打开后的 30 秒内重试。`command.fullScreen` 会幂等地执行 `workbench.action.toggleFullScreen`。
 `payload.focus` 现在通过 VS Code context key 区分代码编辑器、文本输入框和其他组件；焦点轮询仅在 WebSocket 已连接时运行，并在插件销毁或断线时停止。

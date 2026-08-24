@@ -290,6 +290,7 @@ class FastBridge {
     this.statusInFlight = null
     this.focusPoll = null
     this.lastStatusSignature = null
+    this.lastSelectedText = null
     this.output = this.createOutputChannel()
     this.logDirectory = (this.context.logUri || this.context.globalStorageUri || this.context.storageUri)?.fsPath || ''
   }
@@ -640,7 +641,17 @@ class FastBridge {
   async currentSelectedText() {
     const editor = vscode.window.activeTextEditor
     if (!editor || !this.settings().sendText) return null
-    return editor.selection.isEmpty ? '' : editor.document.getText(editor.selection)
+    const selectedText = editor.selection.isEmpty ? '' : editor.document.getText(editor.selection)
+    if (selectedText !== this.lastSelectedText) {
+      this.lastSelectedText = selectedText
+      return selectedText
+    }
+    await new Promise(resolve => setTimeout(resolve, 80))
+    const refreshedEditor = vscode.window.activeTextEditor
+    if (!refreshedEditor || !this.settings().sendText) return selectedText
+    const refreshedText = refreshedEditor.selection.isEmpty ? '' : refreshedEditor.document.getText(refreshedEditor.selection)
+    this.lastSelectedText = refreshedText
+    return refreshedText
   }
 
   async currentLineContent() {
@@ -897,18 +908,57 @@ class FastBridge {
     return path.isAbsolute(configured) || !folder ? configured : path.resolve(folder.uri.fsPath, configured)
   }
 
+  openDocumentUri(requested) {
+    let requestedUri
+    try {
+      if (typeof requested !== 'string') return null
+      if (/^file:/i.test(requested)) requestedUri = vscode.Uri.parse(requested)
+      else if (path.isAbsolute(requested)) requestedUri = vscode.Uri.file(path.resolve(requested))
+      else if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(requested)) requestedUri = vscode.Uri.parse(requested)
+      else return null
+    } catch (error) {
+      return null
+    }
+    return (vscode.workspace.textDocuments || []).find(document => {
+      if (requestedUri.scheme === 'file' && document.uri.scheme === 'file') {
+        return path.resolve(document.uri.fsPath).toLowerCase() === path.resolve(requestedUri.fsPath).toLowerCase()
+      }
+      return document.uri.toString() === requestedUri.toString()
+    })?.uri || null
+  }
+
   resolveUri(requested, payload, target, allowActive) {
     if (!requested && allowActive && vscode.window.activeTextEditor) return vscode.window.activeTextEditor.document.uri
     if (!requested) throw new Error('payload.path is required')
-    if (/^file:/i.test(requested)) return vscode.Uri.parse(requested)
     const requestedBase = payload.projectBasePath || target.projectBasePath
     const candidates = this.projects().filter(item => (!target.projectId || item.projectId === target.projectId) &&
       (!requestedBase || path.resolve(item.basePath).toLowerCase() === path.resolve(requestedBase).toLowerCase()))
+    const requestedUri = /^file:/i.test(requested) ? vscode.Uri.parse(requested) : null
+    if (allowActive && requestedUri) {
+      const requestedPath = requestedUri.scheme === 'file' ? path.resolve(requestedUri.fsPath) : ''
+      const project = requestedPath && candidates.find(item => {
+        const base = path.resolve(item.basePath)
+        return requestedPath === base || requestedPath.toLowerCase().startsWith((base + path.sep).toLowerCase())
+      })
+      if (project) return vscode.Uri.file(requestedPath)
+    }
+    if (requestedUri) {
+      if (allowActive && (!target.projectId && !requestedBase || candidates.length > 0)) {
+        const openUri = this.openDocumentUri(requested)
+        if (openUri) return openUri
+        throw new Error('File URI was not found in an open text document')
+      }
+      return requestedUri
+    }
     const project = candidates.find(item => {
       const base = path.resolve(item.basePath)
       const candidate = path.resolve(base, requested)
       return candidate === base || candidate.toLowerCase().startsWith((base + path.sep).toLowerCase())
     })
+    if (!project && allowActive && (!target.projectId && !requestedBase || candidates.length > 0)) {
+      const openUri = this.openDocumentUri(requested)
+      if (openUri) return openUri
+    }
     if (!project) throw new Error('File was not found inside an open project')
     const resolved = path.resolve(project.basePath, requested)
     return vscode.Uri.file(resolved)
@@ -948,7 +998,9 @@ class FastBridge {
 
   async find(payload, target) {
     if (!payload.query) throw Object.assign(new Error('payload.query is required'), { code: 'INVALID_QUERY' })
-    const editor = await this.openEditor(payload, target, true)
+    const document = await vscode.workspace.openTextDocument(this.resolveUri(payload.path, payload, target, true))
+    let editor = await vscode.window.showTextDocument(document, { preview: false, preserveFocus: false })
+    this.log(`find target opened; path=${editor.document.uri.fsPath}; select=${!!payload.select}; queryLength=${payload.query.length}`)
     const text = editor.document.getText()
     const from = Math.max(0, Math.min(payload.startOffset || 0, text.length))
     let start = -1
@@ -968,8 +1020,50 @@ class FastBridge {
     if (start < 0) throw Object.assign(new Error('No match found'), { code: 'NOT_FOUND' })
     const first = editor.document.positionAt(start)
     const last = editor.document.positionAt(end)
-    editor.selection = payload.select ? new vscode.Selection(first, last) : new vscode.Selection(first, first)
-    editor.revealRange(new vscode.Range(first, last), vscode.TextEditorRevealType.InCenter)
+    this.log(`find matched; path=${editor.document.uri.fsPath}; startOffset=${start}; endOffset=${end}`)
+    const targetRange = new vscode.Range(first, last)
+    const targetSelection = payload.select ? new vscode.Selection(first, last) : new vscode.Selection(first, first)
+    const applyTarget = currentEditor => {
+      currentEditor.selection = targetSelection
+      currentEditor.revealRange(targetRange, vscode.TextEditorRevealType.InCenter)
+    }
+    applyTarget(editor)
+    await vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup')
+
+    const samePosition = (left, right) => left && right && left.line === right.line && left.character === right.character
+    const sameDocument = candidate => candidate && candidate.document.uri.toString() === document.uri.toString()
+    const selectionApplied = candidate => candidate && samePosition(candidate.selection.start, targetSelection.start) &&
+      samePosition(candidate.selection.end, targetSelection.end)
+    const rangeVisible = candidate => {
+      if (!Array.isArray(candidate?.visibleRanges)) return undefined
+      const compare = (left, right) => left.line - right.line || left.character - right.character
+      return candidate.visibleRanges.some(visible => compare(visible.end, targetRange.start) >= 0 &&
+        compare(targetRange.end, visible.start) >= 0)
+    }
+    const verifyTarget = async () => {
+      await new Promise(resolve => setTimeout(resolve, 50))
+      const activeEditor = vscode.window.activeTextEditor
+      const editorTextFocus = await this.contextKeyValue('editorTextFocus')
+      return {
+        activeEditor,
+        activeDocument: sameDocument(activeEditor),
+        selection: selectionApplied(activeEditor),
+        visible: rangeVisible(activeEditor),
+        textFocus: contextKeyIsKnown(editorTextFocus) ? contextKeyIsTrue(editorTextFocus) : undefined,
+      }
+    }
+
+    let verification = await verifyTarget()
+    if (!verification.activeDocument || !verification.selection || verification.visible === false || verification.textFocus === false) {
+      editor = await vscode.window.showTextDocument(document, { viewColumn: editor.viewColumn, preview: false, preserveFocus: false })
+      applyTarget(editor)
+      await vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup')
+      verification = await verifyTarget()
+    }
+    if (!verification.activeDocument || !verification.selection || verification.visible === false || verification.textFocus === false) {
+      throw Object.assign(new Error('Find target was not activated, selected, or revealed'), { code: 'FIND_NOT_VISIBLE' })
+    }
+    this.log(`find applied; activePath=${verification.activeEditor?.document.uri.fsPath || ''}; activeDocument=${verification.activeDocument}; selectionApplied=${verification.selection}; rangeVisible=${verification.visible === undefined ? 'unknown' : verification.visible}; editorTextFocus=${verification.textFocus === undefined ? 'unknown' : verification.textFocus}`)
     return {
       path: editor.document.uri.fsPath,
       startOffset: start,
