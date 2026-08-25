@@ -454,7 +454,7 @@ class FastBridge {
       fullScreen: snapshot.fullScreen,
       editorOpenedAt: snapshot.editorOpenedAt,
       activeProject: snapshot.activeEditor?.project || null,
-      capabilities: ['state', 'getInputable', 'getContext', 'getObjectInfo', 'getSelectedText', 'navigate', 'select', 'find', 'requestFocus', 'fullScreen', 'isFullScreen', 'listProjects', 'copyResourcePath', 'pythonPackages'],
+      capabilities: ['state', 'getInputable', 'getContext', 'getObjectInfo', 'getSelectedText', 'getCurrentLineContent', 'navigate', 'select', 'find', 'requestFocus', 'fullScreen', 'isFullScreen', 'listProjects', 'copyResourcePath', 'pythonPackages'],
     }
   }
 
@@ -646,12 +646,24 @@ class FastBridge {
       this.lastSelectedText = selectedText
       return selectedText
     }
-    await new Promise(resolve => setTimeout(resolve, 80))
-    const refreshedEditor = vscode.window.activeTextEditor
-    if (!refreshedEditor || !this.settings().sendText) return selectedText
-    const refreshedText = refreshedEditor.selection.isEmpty ? '' : refreshedEditor.document.getText(refreshedEditor.selection)
-    this.lastSelectedText = refreshedText
-    return refreshedText
+    const pollIntervalMs = 30
+    const maxWaitMs = 200
+    for (let elapsedMs = 0; elapsedMs < maxWaitMs;) {
+      const delayMs = Math.min(pollIntervalMs, maxWaitMs - elapsedMs)
+      await new Promise(resolve => setTimeout(resolve, delayMs))
+      elapsedMs += delayMs
+      const refreshedEditor = vscode.window.activeTextEditor
+      if (!refreshedEditor || !this.settings().sendText) {
+        if (elapsedMs >= maxWaitMs) return selectedText
+        continue
+      }
+      const refreshedText = refreshedEditor.selection.isEmpty ? '' : refreshedEditor.document.getText(refreshedEditor.selection)
+      if (refreshedText !== selectedText || elapsedMs >= maxWaitMs) {
+        this.lastSelectedText = refreshedText
+        return refreshedText
+      }
+    }
+    return selectedText
   }
 
   async currentLineContent() {
@@ -1000,7 +1012,6 @@ class FastBridge {
     if (!payload.query) throw Object.assign(new Error('payload.query is required'), { code: 'INVALID_QUERY' })
     const document = await vscode.workspace.openTextDocument(this.resolveUri(payload.path, payload, target, true))
     let editor = await vscode.window.showTextDocument(document, { preview: false, preserveFocus: false })
-    this.log(`find target opened; path=${editor.document.uri.fsPath}; select=${!!payload.select}; queryLength=${payload.query.length}`)
     const text = editor.document.getText()
     const from = Math.max(0, Math.min(payload.startOffset || 0, text.length))
     let start = -1
@@ -1020,7 +1031,6 @@ class FastBridge {
     if (start < 0) throw Object.assign(new Error('No match found'), { code: 'NOT_FOUND' })
     const first = editor.document.positionAt(start)
     const last = editor.document.positionAt(end)
-    this.log(`find matched; path=${editor.document.uri.fsPath}; startOffset=${start}; endOffset=${end}`)
     const targetRange = new vscode.Range(first, last)
     const targetSelection = payload.select ? new vscode.Selection(first, last) : new vscode.Selection(first, first)
     const applyTarget = currentEditor => {
@@ -1063,7 +1073,6 @@ class FastBridge {
     if (!verification.activeDocument || !verification.selection || verification.visible === false || verification.textFocus === false) {
       throw Object.assign(new Error('Find target was not activated, selected, or revealed'), { code: 'FIND_NOT_VISIBLE' })
     }
-    this.log(`find applied; activePath=${verification.activeEditor?.document.uri.fsPath || ''}; activeDocument=${verification.activeDocument}; selectionApplied=${verification.selection}; rangeVisible=${verification.visible === undefined ? 'unknown' : verification.visible}; editorTextFocus=${verification.textFocus === undefined ? 'unknown' : verification.textFocus}`)
     return {
       path: editor.document.uri.fsPath,
       startOffset: start,

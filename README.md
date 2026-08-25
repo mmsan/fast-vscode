@@ -4,7 +4,7 @@
 
 ## Fast Bridge
 
-三个插件都支持通过 `command.getSelectedText` 主动读取当前编辑器选中文本，并通过 `command.getCurrentLineContent` 读取当前代码行；Fast 端快捷调用分别为 `await f.editorBridge.getCurrentSelectedText()` 和 `await f.editorBridge.getCurrentLineContent()`。选区结果和上次主动读取不同时会立即返回；相同时插件会在 80 毫秒后复读一次并返回最新结果。没有选择时前者返回空字符串，关闭 `fastBridge.sendText` 或没有活动编辑器时返回 `null`。VS Code 的查询框等非编辑器输入框会被识别为输入焦点；由于 VS Code 扩展 API 不直接暴露内置查询框的选区文本，`ctrlC()` 会在主动读取返回 `null` 时回退到原生 Ctrl+C，从而继续获取该输入框中的选中内容。
+三个插件都支持通过 `command.getSelectedText` 主动读取当前编辑器选中文本，并通过 `command.getCurrentLineContent` 读取当前代码行；Fast 端快捷调用分别为 `await f.editorBridge.getCurrentSelectedText()` 和 `await f.editorBridge.getCurrentLineContent()`。选区结果和上次主动读取不同时会立即返回；相同时插件每隔 30 毫秒复读一次，发现变化便提前返回，始终相同则在 200 毫秒时返回最新结果。没有选择时前者返回空字符串，关闭 `fastBridge.sendText` 或没有活动编辑器时返回 `null`。VS Code 的查询框等非编辑器输入框会被识别为输入焦点；由于 VS Code 扩展 API 不直接暴露内置查询框的选区文本，`ctrlC()` 会在主动读取返回 `null` 时回退到原生 Ctrl+C，从而继续获取该输入框中的选中内容。
 
 在 VS Code 的 Files Explorer 中选中一个或多个文件/目录并按 `Ctrl+Shift+C` 时，插件会复制全部资源路径。WebSocket 命令 `command.copyResourcePath` 在 `data.paths` 返回全部绝对路径；单选时还保留兼容字段 `data.path`。
 
