@@ -454,7 +454,7 @@ class FastBridge {
       fullScreen: snapshot.fullScreen,
       editorOpenedAt: snapshot.editorOpenedAt,
       activeProject: snapshot.activeEditor?.project || null,
-      capabilities: ['state', 'getInputable', 'getContext', 'getObjectInfo', 'getSelectedText', 'getCurrentLineContent', 'navigate', 'select', 'find', 'requestFocus', 'fullScreen', 'isFullScreen', 'listProjects', 'copyResourcePath', 'pythonPackages', 'ctrlW', 'shiftHome'],
+      capabilities: ['state', 'getInputable', 'getContext', 'getObjectInfo', 'getSelectedText', 'getCurrentLineContent', 'navigate', 'select', 'find', 'requestFocus', 'fullScreen', 'isFullScreen', 'listProjects', 'copyResourcePath', 'pythonPackages', 'ctrlW', 'ctrlShiftW', 'shiftHome'],
     }
   }
 
@@ -834,7 +834,7 @@ class FastBridge {
     }
     const type = message.type || ''
     const target = message.target || {}
-    const mutating = ['command.navigate', 'command.select', 'command.find', 'command.requestFocus', 'command.fullScreen', 'command.copyResourcePath', 'command.queryPythonPackages', 'command.ctrlW', 'command.shiftHome'].includes(type)
+    const mutating = ['command.navigate', 'command.select', 'command.find', 'command.requestFocus', 'command.fullScreen', 'command.copyResourcePath', 'command.queryPythonPackages', 'command.ctrlW', 'command.ctrlShiftW', 'command.shiftHome'].includes(type)
     if (mutating && !target.instanceId) {
       return this.send('command.result', this.error(type, 'INVALID_MESSAGE', 'target.instanceId is required for this command'), message.id)
     }
@@ -855,6 +855,7 @@ class FastBridge {
       else if (type === 'command.find') data = await this.find(message.payload || {}, target)
       else if (type === 'command.requestFocus') data = await this.requestFocus()
       else if (type === 'command.ctrlW') data = await this.ctrlW()
+      else if (type === 'command.ctrlShiftW') data = await this.ctrlShiftW()
       else if (type === 'command.shiftHome') data = await this.shiftHome()
       else if (type === 'command.fullScreen') data = await this.fullScreen()
       else if (type === 'command.copyResourcePath') data = await this.copyResourcePath()
@@ -1104,14 +1105,29 @@ class FastBridge {
     return {handled: true}
   }
 
-
-  async shiftHome() {
+  async ctrlShiftW() {
     if (!vscode.window.activeTextEditor) {
       throw Object.assign(new Error('No active text editor'), {code: 'NO_EDITOR'})
     }
-    await vscode.commands.executeCommand('cursorHomeSelect')
-    await vscode.commands.executeCommand('cursorHomeSelect')
+    await vscode.commands.executeCommand('editor.action.smartSelect.shrink')
     return {handled: true}
+  }
+
+
+  async shiftHome() {
+    const editor = vscode.window.activeTextEditor
+    if (!editor) {
+      throw Object.assign(new Error('No active text editor'), {code: 'NO_EDITOR'})
+    }
+    let handled = false
+    editor.selections = editor.selections.map(selection => {
+      // Preserve a selection whose active end is already at the line start.
+      // Recreating it would collapse the selection on a repeated Shift+Home.
+      if (selection.active.character === 0) return selection
+      handled = true
+      return new vscode.Selection(selection.active, new vscode.Position(selection.active.line, 0))
+    })
+    return {handled}
   }
 
   async isFullScreen() {

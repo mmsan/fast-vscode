@@ -67,6 +67,8 @@ npm.cmd ls --depth=0
 .\publish-local-plugin.cmd -NoVersionBump -SkipInstall
 ```
 
+Keep model-visible verification output concise. Successful `node --check` commands should normally produce no output; summarize `npm.cmd ls --depth=0` rather than returning the full dependency tree. When package verification is verbose, capture the complete `.\publish-local-plugin.cmd -NoVersionBump -SkipInstall` output in a local ignored or temporary log and report only the exit status, dependency/package check summary, and generated VSIX path and size. Routine npm/vsce chatter and repeated known warnings may be omitted from the model-visible success summary, but preserve nonzero exit codes, missing or extraneous dependency findings, packaging errors, unexpected warnings, and a short surrounding diagnostic excerpt.
+
 Do not commit npm caches, temporary package files, or generated VSIX files unless explicitly requested.
 
 ## Three-plugin synchronization
