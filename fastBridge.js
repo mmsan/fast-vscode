@@ -256,7 +256,7 @@ const focusContextKeys = [
   'editorTextFocus',
   'inputFocus',
   'textInputFocus',
-  'findInputFocus',
+  'findInputFocussed',
   'searchInputBoxFocus',
   'filesExplorerFocus',
   'explorerViewletFocus',
@@ -308,6 +308,10 @@ class FastBridge {
     this.context.subscriptions.push(
       this.output,
       vscode.window.onDidChangeActiveTextEditor(() => {
+        this.schedule('focus.changed', 0)
+        this.scheduleStatus(0)
+      }),
+      vscode.window.onDidChangeWindowState(() => {
         this.schedule('focus.changed', 0)
         this.scheduleStatus(0)
       }),
@@ -460,7 +464,7 @@ class FastBridge {
       fullScreen: snapshot.fullScreen,
       editorOpenedAt: snapshot.editorOpenedAt,
       activeProject: snapshot.activeEditor?.project || null,
-      capabilities: ['state', 'getInputable', 'getContext', 'getObjectInfo', 'getSelectedText', 'getCurrentLineContent', 'navigate', 'select', 'find', 'requestFocus', 'fullScreen', 'isFullScreen', 'listProjects', 'copyResourcePath', 'pythonPackages', 'ctrlW', 'ctrlShiftW', 'shiftHome'],
+      capabilities: ['state', 'getInputable', 'getContext', 'getObjectInfo', 'getSelectedText', 'getCurrentLineContent', 'navigate', 'select', 'find', 'requestFocus', 'fullScreen', 'isFullScreen', 'listProjects', 'copyResourcePath', 'pythonPackages', 'ctrlW', 'ctrlShiftW', 'shiftHome', 'moveUpIfLastLine'],
     }
   }
 
@@ -604,7 +608,7 @@ class FastBridge {
     const inputFocused = [
       context.inputFocus,
       context.textInputFocus,
-      context.findInputFocus,
+      context.findInputFocussed,
       context.searchInputBoxFocus,
     ].some(contextKeyIsTrue)
     const explorerFocused = [
@@ -613,13 +617,14 @@ class FastBridge {
     ].some(contextKeyIsTrue) ||
       contextKeyIsTrue(context.sideBarFocus) && context.activeViewlet === 'workbench.view.explorer'
     const sidebarFocused = contextKeyIsTrue(context.sideBarFocus)
-    const editorFocusKnown = contextKeyIsKnown(context.editorFocus) ||
-      contextKeyIsKnown(context.editorTextFocus)
+    const editorTextFocusKnown = contextKeyIsKnown(context.editorTextFocus)
+    const editorFocusKnown = contextKeyIsKnown(context.editorFocus)
     const known = editorFocusKnown || focusContextKeys.some(key => contextKeyIsKnown(context[key]))
-    const editorFocused = editorFocusKnown
-      ? (contextKeyIsTrue(context.editorFocus) || contextKeyIsTrue(context.editorTextFocus)) &&
-        !inputFocused && !sidebarFocused && !explorerFocused
-      : !inputFocused && !sidebarFocused && !explorerFocused
+    const editorFocused = vscode.window.state.focused && (editorTextFocusKnown
+      ? contextKeyIsTrue(context.editorTextFocus)
+      : editorFocusKnown
+        ? contextKeyIsTrue(context.editorFocus) && !inputFocused && !sidebarFocused && !explorerFocused
+        : !inputFocused && !sidebarFocused && !explorerFocused)
     return {known, editorFocused, inputFocused, explorerFocused}
   }
 
@@ -845,7 +850,7 @@ class FastBridge {
     }
     const type = message.type || ''
     const target = message.target || {}
-    const mutating = ['command.navigate', 'command.select', 'command.find', 'command.requestFocus', 'command.fullScreen', 'command.copyResourcePath', 'command.queryPythonPackages', 'command.ctrlW', 'command.ctrlShiftW', 'command.shiftHome'].includes(type)
+    const mutating = ['command.navigate', 'command.select', 'command.find', 'command.requestFocus', 'command.fullScreen', 'command.copyResourcePath', 'command.queryPythonPackages', 'command.ctrlW', 'command.ctrlShiftW', 'command.shiftHome', 'command.moveUpIfLastLine'].includes(type)
     if (mutating && !target.instanceId) {
       return this.send('command.result', this.error(type, 'INVALID_MESSAGE', 'target.instanceId is required for this command'), message.id)
     }
@@ -868,6 +873,7 @@ class FastBridge {
       else if (type === 'command.ctrlW') data = await this.ctrlW()
       else if (type === 'command.ctrlShiftW') data = await this.ctrlShiftW()
       else if (type === 'command.shiftHome') data = await this.shiftHome()
+      else if (type === 'command.moveUpIfLastLine') data = await this.moveUpIfLastLine()
       else if (type === 'command.fullScreen') data = await this.fullScreen()
       else if (type === 'command.copyResourcePath') data = await this.copyResourcePath()
       else return this.send('command.result', this.error(type, 'UNKNOWN_COMMAND', `Unsupported command: ${type}`), message.id)
@@ -1141,6 +1147,20 @@ class FastBridge {
       return new vscode.Selection(selection.active, new vscode.Position(selection.active.line, 0))
     })
     return {handled}
+  }
+
+  async moveUpIfLastLine() {
+    const editor = vscode.window.activeTextEditor
+    if (!editor) throw Object.assign(new Error('No active text editor'), {code: 'NO_EDITOR'})
+    const active = editor.selection.active
+    if (active.line === 0) return {handled: false}
+    for (let index = active.line + 1; index < editor.document.lineCount; index++) {
+      if (editor.document.lineAt(index).text.trim()) return {handled: false}
+    }
+    const line = active.line - 1
+    const column = Math.min(active.character, editor.document.lineAt(line).text.length)
+    editor.selection = new vscode.Selection(line, column, line, column)
+    return {handled: true}
   }
 
   async isFullScreen() {
