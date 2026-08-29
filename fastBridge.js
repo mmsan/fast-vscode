@@ -284,6 +284,7 @@ class FastBridge {
     this.reconnectStartedAt = 0
     this.slowReconnectLogged = false
     this.connectionLogStates = new Map()
+    this.startupFullscreenHandshakeSent = false
     this.editorOpenedKey = null
     this.editorOpenedAt = 0
     this.pendingStatus = null
@@ -390,7 +391,12 @@ class FastBridge {
       const failures = this.connectionFailures
       this.connectionFailures = 0
       this.log(`connected${failures > 0 ? `; recoveredAfterFailures=${failures}` : ''}`)
-      this.send('bridge.hello', await this.identity())
+      const identity = await this.identity()
+      if (!this.startupFullscreenHandshakeSent) {
+        this.startupFullscreenHandshakeSent = true
+        identity.startupFullScreenUntil = Date.now() + 8000
+      }
+      this.send('bridge.hello', identity)
       this.schedule('editor.state', 0)
       this.scheduleStatus(0)
       this.startFocusPolling()
@@ -669,8 +675,13 @@ class FastBridge {
   async currentLineContent() {
     const editor = vscode.window.activeTextEditor
     if (!editor || !this.settings().sendText) return null
-    const snapshot = await this.snapshot()
-    if (snapshot.focus?.type !== 'editor' || snapshot.activeEditor?.ownsFocus !== true) return null
+    const [editorFocus, editorTextFocus] = await Promise.all([
+      this.contextKeyValue('editorFocus'),
+      this.contextKeyValue('editorTextFocus'),
+    ])
+    if (contextKeyIsKnown(editorFocus) || contextKeyIsKnown(editorTextFocus)) {
+      if (!contextKeyIsTrue(editorFocus) && !contextKeyIsTrue(editorTextFocus)) return null
+    } else if (!(await this.focusContext()).editorFocused) return null
     return editor.document.lineAt(editor.selection.active.line).text
   }
 
@@ -1014,7 +1025,9 @@ class FastBridge {
   async find(payload, target) {
     if (!payload.query) throw Object.assign(new Error('payload.query is required'), { code: 'INVALID_QUERY' })
     const document = await vscode.workspace.openTextDocument(this.resolveUri(payload.path, payload, target, true))
-    let editor = await vscode.window.showTextDocument(document, { preview: false, preserveFocus: false })
+    let editor = vscode.window.activeTextEditor?.document.uri.toString() === document.uri.toString()
+      ? vscode.window.activeTextEditor
+      : await vscode.window.showTextDocument(document, { preview: false, preserveFocus: false })
     const text = editor.document.getText()
     const from = Math.max(0, Math.min(payload.startOffset || 0, text.length))
     let start = -1
@@ -1136,9 +1149,6 @@ class FastBridge {
   }
 
   async fullScreen() {
-    const state = await this.isFullScreen()
-    if (state.fullScreen === true) return state
-    if (state.fullScreen !== false) return {...state, skipped: true}
     await vscode.commands.executeCommand('workbench.action.toggleFullScreen')
     await new Promise(resolve => setTimeout(resolve, 80))
     return this.isFullScreen()
