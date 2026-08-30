@@ -464,7 +464,7 @@ class FastBridge {
       fullScreen: snapshot.fullScreen,
       editorOpenedAt: snapshot.editorOpenedAt,
       activeProject: snapshot.activeEditor?.project || null,
-      capabilities: ['state', 'getInputable', 'getContext', 'getObjectInfo', 'getSelectedText', 'getCurrentLineContent', 'navigate', 'select', 'find', 'requestFocus', 'fullScreen', 'isFullScreen', 'listProjects', 'copyResourcePath', 'pythonPackages', 'ctrlW', 'ctrlShiftW', 'shiftHome', 'moveUpIfLastLine'],
+      capabilities: ['state', 'getInputable', 'getContext', 'getObjectInfo', 'getSelectedText', 'getCurrentLineContent', 'navigate', 'select', 'find', 'deleteSelection', 'requestFocus', 'fullScreen', 'isFullScreen', 'listProjects', 'copyResourcePath', 'pythonPackages', 'ctrlW', 'ctrlShiftW', 'shiftHome', 'home', 'shiftDown', 'shiftUp', 'moveUpIfLastLine'],
     }
   }
 
@@ -690,6 +690,15 @@ class FastBridge {
     return editor.document.lineAt(editor.selection.active.line).text
   }
 
+  async deleteSelection(expectedText) {
+    const editor = vscode.window.activeTextEditor
+    if (!editor) throw Object.assign(new Error('No active text editor'), {code: 'NO_EDITOR'})
+    if (typeof expectedText !== 'string') throw Object.assign(new Error('payload.expectedText is required'), {code: 'INVALID_MESSAGE'})
+    if (editor.document.getText(editor.selection) !== expectedText) return {handled: true, matched: false, deleted: false}
+    if (!await editor.edit(edit => edit.delete(editor.selection))) throw new Error('Unable to delete the editor selection')
+    return {handled: true, matched: true, deleted: true}
+  }
+
   async currentInputable() {
     return isInputable(await this.snapshot())
   }
@@ -850,7 +859,7 @@ class FastBridge {
     }
     const type = message.type || ''
     const target = message.target || {}
-    const mutating = ['command.navigate', 'command.select', 'command.find', 'command.requestFocus', 'command.fullScreen', 'command.copyResourcePath', 'command.queryPythonPackages', 'command.ctrlW', 'command.ctrlShiftW', 'command.shiftHome', 'command.moveUpIfLastLine'].includes(type)
+    const mutating = ['command.navigate', 'command.select', 'command.find', 'command.deleteSelection', 'command.requestFocus', 'command.fullScreen', 'command.copyResourcePath', 'command.queryPythonPackages', 'command.ctrlW', 'command.ctrlShiftW', 'command.shiftHome', 'command.home', 'command.shiftDown', 'command.shiftUp', 'command.moveUpIfLastLine'].includes(type)
     if (mutating && !target.instanceId) {
       return this.send('command.result', this.error(type, 'INVALID_MESSAGE', 'target.instanceId is required for this command'), message.id)
     }
@@ -869,10 +878,14 @@ class FastBridge {
       else if (type === 'command.queryPythonPackages') data = await this.queryPythonPackages(message.payload || {}, target)
       else if (type === 'command.navigate' || type === 'command.select') data = await this.navigate(type, message.payload || {}, target)
       else if (type === 'command.find') data = await this.find(message.payload || {}, target)
+      else if (type === 'command.deleteSelection') data = await this.deleteSelection(message.payload?.expectedText)
       else if (type === 'command.requestFocus') data = await this.requestFocus()
       else if (type === 'command.ctrlW') data = await this.ctrlW()
       else if (type === 'command.ctrlShiftW') data = await this.ctrlShiftW()
       else if (type === 'command.shiftHome') data = await this.shiftHome()
+      else if (type === 'command.home') data = await this.home()
+      else if (type === 'command.shiftDown') data = await this.shiftDirection(message.payload || {}, 1)
+      else if (type === 'command.shiftUp') data = await this.shiftDirection(message.payload || {}, -1)
       else if (type === 'command.moveUpIfLastLine') data = await this.moveUpIfLastLine()
       else if (type === 'command.fullScreen') data = await this.fullScreen()
       else if (type === 'command.copyResourcePath') data = await this.copyResourcePath()
@@ -1147,6 +1160,24 @@ class FastBridge {
       return new vscode.Selection(selection.active, new vscode.Position(selection.active.line, 0))
     })
     return {handled}
+  }
+
+  async home() {
+    const editor = vscode.window.activeTextEditor
+    if (!editor) throw Object.assign(new Error('No active text editor'), {code: 'NO_EDITOR'})
+    editor.selections = editor.selections.map(selection => {
+      const position = new vscode.Position(selection.active.line, 0)
+      return new vscode.Selection(position, position)
+    })
+    return {handled: true}
+  }
+
+  async shiftDirection({count = 1}, direction) {
+    const editor = vscode.window.activeTextEditor
+    if (!editor) throw Object.assign(new Error('No active text editor'), {code: 'NO_EDITOR'})
+    count = Math.max(1, Number.isInteger(count) ? count : 1)
+    await vscode.commands.executeCommand('cursorMove', {to: direction > 0 ? 'down' : 'up', by: 'line', value: count, select: true})
+    return {handled: true}
   }
 
   async moveUpIfLastLine() {

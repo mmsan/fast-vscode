@@ -6,18 +6,19 @@ This repository contains the SCS VS Code extension and Fast Bridge client.
 
 - Extension ID: `mmsan.scs`; package: `scs`; entry point: `extension.js`.
 - Bridge client: `fast-vscode-bridge`; editor identity: `ide: Visual Studio Code`. Read the release version from `package.json`; never hard-code it.
-- `fast-vscode-bridge` is recognized by `D:\v\fast\utils\socket-vscode.js`; update that service before changing the value.
+- `fast-vscode-bridge` is recognized by `D:\v\fastjs\utils\socket-vscode.js`; update that service before changing the value.
 
 Key surfaces: `extension.js` (activation/formatting), `fastBridge.js` (WebSocket, snapshots, identities, reconnect, commands, and rolling logs), `package.json` / `package-lock.json` (manifest/version/dependencies), and the publish scripts.
 
-## Bridge behavior and security
+## Shared rules
 
-- Default endpoint is `ws://127.0.0.1:19900`; keep host, port, path, bearer token, auto-connect, text sharing, and context length configurable.
-- Preserve `installationId`, `instanceId`, `connectionId`, deterministic project IDs, project roots, and open-workspace identities. Mutating commands require `target.instanceId` and ignore other instances.
-- Resolve files only inside open workspace roots; reject traversal and absolute paths outside them.
-- `command.copyResourcePath` handles one or more focused Files Explorer files/directories. Return all absolute paths in `data.paths`, retain `data.path` for a single selection, and keep its Ctrl+Shift+C keybinding limited to Files Explorer filesystem resources so other contexts retain Fast Ctrl+Shift+C.
-- A caret is the text insertion caret, not the mouse pointer. `fastBridge.sendText` controls text sharing; when disabled, omit selected/nearby text but retain structural ranges. Never log source text, selections, or bearer tokens.
-- Preserve `D:\v\fast\fast.js` binding of the active file/workspace root to `f.fast.currentWindow.filePath` and `.dir`.
+See `D:\v\fast-idea\AGENTS.md` under **Shared editor-bridge rules**. Do not duplicate shared protocol, focus/search semantics, performance constraints, privacy rules, targeting, reconnect, or cross-plugin synchronization rules here.
+
+## VS Code-specific bridge rules
+
+- Keep `command.copyResourcePath` and its Ctrl+Shift+C override scoped to Files Explorer resources; inspect the implementation for response fields.
+- A caret is the text insertion caret, not the mouse pointer. `fastBridge.sendText` controls text sharing; when disabled, omit selected/nearby text but retain structural ranges.
+- Preserve `D:\v\fastjs\fast.js` binding of the active file/workspace root to `f.fast.currentWindow.filePath` and `.dir`.
 - Keep `Fast Bridge` diagnostics concise, use the VS Code `LogOutputChannel`, and delete plugin log files older than three days.
 
 ## Plugin log locations (on demand)
@@ -30,9 +31,9 @@ When changing handshake fields, events, commands, or payloads, update the VS Cod
 ```powershell
 node --check .\extension.js
 node --check .\fastBridge.js
-node --check D:\v\fast\utils\socket-vscode.js
-node --check D:\v\fast\utils\socket-browser.js
-node --check D:\v\fast\utils\f.mjs
+node --check D:\v\fastjs\utils\socket-vscode.js
+node --check D:\v\fastjs\utils\socket-browser.js
+node --check D:\v\fastjs\utils\f.mjs
 ```
 
 ## Local package publishing
@@ -58,7 +59,7 @@ The script must:
 
 Use `-NoVersionBump` only to retry an interrupted/manual version bump. Use `-SkipInstall` for package-only verification. A release is complete only when the VSIX exists and syntax, dependency, and package checks pass.
 
-For a coordinated release, use the highest current version across IDEA, Visual Studio, and VS Code, increment the patch component once, write that exact version to `package.json`, `package-lock.json`, the IDEA property, the VSIX manifest/assembly files, and `D:\v\fast\bridge-version.json` when maintained. Then run this publisher with `-NoVersionBump`; do not let `npm version patch` create a different version. Verify the generated `scs-<shared-version>.vsix` before installation or reload.
+For a coordinated release, use the highest current version across IDEA, Visual Studio, and VS Code, increment the patch component once, write that exact version to `package.json`, `package-lock.json`, the IDEA property, the VSIX manifest/assembly files, and `D:\v\fastjs\bridge-version.json` when maintained. Then run this publisher with `-NoVersionBump`; do not let `npm version patch` create a different version. Verify the generated `scs-<shared-version>.vsix` before installation or reload.
 
 Recommended verification:
 
@@ -73,11 +74,6 @@ Keep model-visible verification output concise. Successful `node --check` comman
 
 Do not commit npm caches, temporary package files, or generated VSIX files unless explicitly requested.
 
-## Three-plugin synchronization
+## Cross-project changes
 
-Any shared event, command, identity, targeting, path-safety, text-sharing, reconnect, or disposal change must be updated across:
-
-- Plugins: `D:\v\fast-idea` and `D:\v\fast-visual-studio`.
-- Fast adapters: `D:\v\fast\utils\socket-idea.js`, `socket-visual-studio.js`, and `socket-vscode.js`.
-
-Also update affected protocol documents and README examples. Keep VS Code-specific language/UI details local. For shared changes, verify all three installable packages with their repository procedures; source-level checks alone are insufficient.
+Follow the shared rules in `D:\v\fast-idea\AGENTS.md`. Keep VS Code-specific language/UI details local and use the package verification procedure for all three plugins when a shared change is made.
