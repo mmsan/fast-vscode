@@ -30,11 +30,12 @@ try {
     }
 
     $npm = Get-Command 'npm.cmd' -ErrorAction Stop
-    & $npm.Source install --ignore-scripts
+    $npmCache = Join-Path ([IO.Path]::GetTempPath()) 'fast-vscode-npm-cache'
+    & $npm.Source --cache $npmCache install --ignore-scripts
     if ($LASTEXITCODE -ne 0) { throw "npm install failed with exit code $LASTEXITCODE." }
 
     $artifact = Join-Path $projectRoot "scs-$version.vsix"
-    & $npm.Source exec --yes -- '@vscode/vsce' package --out $artifact
+    & $npm.Source --cache $npmCache exec --yes -- '@vscode/vsce' package --out $artifact
     if ($LASTEXITCODE -ne 0) { throw "VSIX packaging failed with exit code $LASTEXITCODE." }
     if (-not (Test-Path -LiteralPath $artifact)) { throw "VSIX was not created: $artifact" }
 

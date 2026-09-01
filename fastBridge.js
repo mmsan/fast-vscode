@@ -46,6 +46,44 @@ const pythonPackageQuery = [
   "print(json.dumps({'interpreter': sys.executable, 'version': '.'.join(str(part) for part in sys.version_info[:3]), 'environmentType': environment_type, 'packages': items}))",
 ].join('\n')
 
+function inputTopOffset(text, python) {
+  let offset = 0
+  let blockComment = false
+  while (offset < text.length) {
+    const lineEnd = text.indexOf('\n', offset)
+    const contentEnd = lineEnd < 0 ? text.length : lineEnd
+    const line = text.slice(offset, contentEnd).replace(/\r$/, '')
+    let trimmed = line.trim()
+    if (blockComment) {
+      const close = trimmed.indexOf('*/')
+      if (close < 0) {
+        offset = lineEnd < 0 ? text.length : lineEnd + 1
+        continue
+      }
+      blockComment = false
+      trimmed = trimmed.slice(close + 2).trim()
+      if (!trimmed || trimmed.startsWith('//') || (python && trimmed.startsWith('#'))) {
+        offset = lineEnd < 0 ? text.length : lineEnd + 1
+        continue
+      }
+      return offset
+    }
+    if (trimmed.startsWith('//') || (python && trimmed.startsWith('#'))) {
+      offset = lineEnd < 0 ? text.length : lineEnd + 1
+      continue
+    }
+    if (trimmed.startsWith('/*')) {
+      const close = trimmed.indexOf('*/', 2)
+      if (close < 0) blockComment = true
+      else if (trimmed.slice(close + 2).trim()) return offset
+      offset = lineEnd < 0 ? text.length : lineEnd + 1
+      continue
+    }
+    return offset
+  }
+  return offset
+}
+
 function syntaxContextAt(text, offset, languageId) {
   const stack = []
   const isPython = /^(python|cython)$/.test(languageId || '')
@@ -464,7 +502,7 @@ class FastBridge {
       fullScreen: snapshot.fullScreen,
       editorOpenedAt: snapshot.editorOpenedAt,
       activeProject: snapshot.activeEditor?.project || null,
-      capabilities: ['state', 'getInputable', 'getContext', 'getObjectInfo', 'getSelectedText', 'getCurrentLineContent', 'navigate', 'select', 'find', 'deleteSelection', 'requestFocus', 'fullScreen', 'isFullScreen', 'listProjects', 'copyResourcePath', 'pythonPackages', 'ctrlW', 'ctrlShiftW', 'shiftHome', 'home', 'shiftDown', 'shiftUp', 'moveUpIfLastLine'],
+      capabilities: ['state', 'getInputable', 'getContext', 'getObjectInfo', 'getSelectedText', 'getCurrentLineContent', 'navigate', 'select', 'find', 'deleteSelection', 'requestFocus', 'fullScreen', 'isFullScreen', 'listProjects', 'copyResourcePath', 'pythonPackages', 'ctrlW', 'ctrlShiftW', 'shiftHome', 'home', 'end', 'inputTop', 'shiftDown', 'shiftUp', 'moveUpIfLastLine'],
     }
   }
 
@@ -859,7 +897,7 @@ class FastBridge {
     }
     const type = message.type || ''
     const target = message.target || {}
-    const mutating = ['command.navigate', 'command.select', 'command.find', 'command.deleteSelection', 'command.requestFocus', 'command.fullScreen', 'command.copyResourcePath', 'command.queryPythonPackages', 'command.ctrlW', 'command.ctrlShiftW', 'command.shiftHome', 'command.home', 'command.shiftDown', 'command.shiftUp', 'command.moveUpIfLastLine'].includes(type)
+    const mutating = ['command.navigate', 'command.select', 'command.find', 'command.deleteSelection', 'command.requestFocus', 'command.fullScreen', 'command.copyResourcePath', 'command.queryPythonPackages', 'command.ctrlW', 'command.ctrlShiftW', 'command.shiftHome', 'command.home', 'command.end', 'command.inputTop', 'command.shiftDown', 'command.shiftUp', 'command.moveUpIfLastLine'].includes(type)
     if (mutating && !target.instanceId) {
       return this.send('command.result', this.error(type, 'INVALID_MESSAGE', 'target.instanceId is required for this command'), message.id)
     }
@@ -884,6 +922,8 @@ class FastBridge {
       else if (type === 'command.ctrlShiftW') data = await this.ctrlShiftW()
       else if (type === 'command.shiftHome') data = await this.shiftHome()
       else if (type === 'command.home') data = await this.home()
+      else if (type === 'command.end') data = await this.end()
+      else if (type === 'command.inputTop') data = await this.inputTop(message.payload?.code)
       else if (type === 'command.shiftDown') data = await this.shiftDirection(message.payload || {}, 1)
       else if (type === 'command.shiftUp') data = await this.shiftDirection(message.payload || {}, -1)
       else if (type === 'command.moveUpIfLastLine') data = await this.moveUpIfLastLine()
@@ -1169,6 +1209,29 @@ class FastBridge {
       const position = new vscode.Position(selection.active.line, 0)
       return new vscode.Selection(position, position)
     })
+    return {handled: true}
+  }
+
+  async end() {
+    const editor = vscode.window.activeTextEditor
+    if (!editor) throw Object.assign(new Error('No active text editor'), {code: 'NO_EDITOR'})
+    editor.selections = editor.selections.map(selection => {
+      const position = new vscode.Position(selection.active.line, editor.document.lineAt(selection.active.line).text.length)
+      return new vscode.Selection(position, position)
+    })
+    return {handled: true}
+  }
+
+  async inputTop(code) {
+    const editor = vscode.window.activeTextEditor
+    if (!editor) throw Object.assign(new Error('No active text editor'), {code: 'NO_EDITOR'})
+    if (typeof code !== 'string' || !code) throw Object.assign(new Error('payload.code is required'), {code: 'INVALID_MESSAGE'})
+    const lineEnding = editor.document.eol === vscode.EndOfLine.CRLF ? '\r\n' : '\n'
+    const text = editor.document.getText()
+    const offset = inputTopOffset(text, /^(python|cython)$/.test(editor.document.languageId || ''))
+    const position = editor.document.positionAt(offset)
+    const prefix = offset > 0 && !/[\r\n]$/.test(text[offset - 1]) ? lineEnding : ''
+    if (!await editor.edit(edit => edit.insert(position, prefix + code + lineEnding))) throw new Error('Unable to insert text at document start')
     return {handled: true}
   }
 

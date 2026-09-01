@@ -1,32 +1,31 @@
 # Fast VS Code Plugin — Agent Guide
 
-## Stable identity and scope
-
-This repository contains the SCS VS Code extension and Fast Bridge client.
+## Scope and identity
 
 - Extension ID: `mmsan.scs`; package: `scs`; entry point: `extension.js`.
-- Bridge client: `fast-vscode-bridge`; editor identity: `ide: Visual Studio Code`. Read the release version from `package.json`; never hard-code it.
+- Bridge client: `fast-vscode-bridge`; editor identity: `ide: Visual Studio Code`. Read the version from `package.json`; never hard-code it.
 - `fast-vscode-bridge` is recognized by `D:\v\fastjs\utils\socket-vscode.js`; update that service before changing the value.
+- Key files: `extension.js`, `fastBridge.js`, `package.json`, `package-lock.json`, and the publish scripts.
 
-Key surfaces: `extension.js` (activation/formatting), `fastBridge.js` (WebSocket, snapshots, identities, reconnect, commands, and rolling logs), `package.json` / `package-lock.json` (manifest/version/dependencies), and the publish scripts.
+## Shared bridge rules
 
-## Shared rules
+Follow `D:\v\fast-idea\AGENTS.md`; do not copy shared protocol, targeting, focus/search, performance, privacy, reconnect, or synchronization rules here.
 
-See `D:\v\fast-idea\AGENTS.md` under **Shared editor-bridge rules**. Do not duplicate shared protocol, focus/search semantics, performance constraints, privacy rules, targeting, reconnect, or cross-plugin synchronization rules here.
-
-## VS Code-specific bridge rules
+## VS Code-specific rules
 
 - Keep `command.copyResourcePath` and its Ctrl+Shift+C override scoped to Files Explorer resources; inspect the implementation for response fields.
-- A caret is the text insertion caret, not the mouse pointer. `fastBridge.sendText` controls text sharing; when disabled, omit selected/nearby text but retain structural ranges.
+- A caret is the text insertion caret. `fastBridge.sendText` controls text sharing; when disabled, omit selected/nearby text but retain structural ranges.
 - Preserve `D:\v\fastjs\fast.js` binding of the active file/workspace root to `f.fast.currentWindow.filePath` and `.dir`.
-- Keep `Fast Bridge` diagnostics concise, use the VS Code `LogOutputChannel`, and delete plugin log files older than three days.
+- Keep `Fast Bridge` diagnostics concise, use `LogOutputChannel`, and delete plugin logs older than three days.
 
-## Plugin log locations (on demand)
+## Logs
 
-- Output channel: `Fast Bridge`, available through the `Fast Bridge: 显示日志` command.
+- Output channel: `Fast Bridge`, available through `Fast Bridge: 显示日志`.
 - Daily file: `fast-vscode-bridge-YYYY-MM-DD.log` in VS Code's extension `logUri` directory.
 
-When changing handshake fields, events, commands, or payloads, update the VS Code and generic Node adapters with backward-compatible routing, then run:
+## Validation
+
+When changing handshake fields, events, commands, or payloads, update the affected Node adapters with backward-compatible routing and run:
 
 ```powershell
 node --check .\extension.js
@@ -36,44 +35,10 @@ node --check D:\v\fastjs\utils\socket-browser.js
 node --check D:\v\fastjs\utils\f.mjs
 ```
 
-## Local package publishing
+## Package and release
 
-Local publication or installation is an explicit user-authorized action, not a default verification step. After ordinary code changes, use source-level syntax or dependency checks. Do not create or install the VSIX, bump a release solely for publication, or run the publishing workflow unless the user explicitly asks to build a package, verify a package, publish locally, release a version, or install it.
-
-For ordinary code changes, the user prefers source-level validation only. Do not create a VSIX unless the user explicitly asks to build a package, verify a package, publish, install, or release. Use the narrowest relevant syntax or dependency check instead.
-
-For a normal local release:
-
-```powershell
-.\publish-local-plugin.cmd
-```
-
-The script must:
-
-1. Increment the patch version in `package.json` and `package-lock.json`.
-2. Restore both files if dependency installation, packaging, or installation fails.
-3. Install dependencies with lifecycle scripts disabled.
-4. Build `scs-<version>.vsix` with `@vscode/vsce`.
-5. Install/update it with `code --install-extension ... --force`.
-6. Tell the user to run **Developer: Reload Window**.
-
-Use `-NoVersionBump` only to retry an interrupted/manual version bump. Use `-SkipInstall` for package-only verification. A release is complete only when the VSIX exists and syntax, dependency, and package checks pass.
-
-For a coordinated release, use the highest current version across IDEA, Visual Studio, and VS Code, increment the patch component once, write that exact version to `package.json`, `package-lock.json`, the IDEA property, the VSIX manifest/assembly files, and `D:\v\fastjs\bridge-version.json` when maintained. Then run this publisher with `-NoVersionBump`; do not let `npm version patch` create a different version. Verify the generated `scs-<shared-version>.vsix` before installation or reload.
-
-Recommended verification:
-
-```powershell
-node --check .\extension.js
-node --check .\fastBridge.js
-npm.cmd ls --depth=0
-.\publish-local-plugin.cmd -NoVersionBump -SkipInstall
-```
-
-Keep model-visible verification output concise. Successful `node --check` commands should normally produce no output; summarize `npm.cmd ls --depth=0` rather than returning the full dependency tree. When package verification is verbose, capture the complete `.\publish-local-plugin.cmd -NoVersionBump -SkipInstall` output in a local ignored or temporary log and report only the exit status, dependency/package check summary, and generated VSIX path and size. Routine npm/vsce chatter and repeated known warnings may be omitted from the model-visible success summary, but preserve nonzero exit codes, missing or extraneous dependency findings, packaging errors, unexpected warnings, and a short surrounding diagnostic excerpt.
-
-Do not commit npm caches, temporary package files, or generated VSIX files unless explicitly requested.
-
-## Cross-project changes
-
-Follow the shared rules in `D:\v\fast-idea\AGENTS.md`. Keep VS Code-specific language/UI details local and use the package verification procedure for all three plugins when a shared change is made.
+- Publication, installation, version bumps, and VSIX creation require explicit authorization. Ordinary changes use source-level checks only.
+- Run `.\publish-local-plugin.cmd` for a local release. It bumps and rolls back package versions on failure, installs dependencies with lifecycle scripts disabled, builds the VSIX, and installs it. Use `-NoVersionBump` only for retries and `-SkipInstall` for package-only verification; ask the user to run **Developer: Reload Window** after installation.
+- A release is complete only when the VSIX exists and syntax, dependency, and package checks pass. Keep verification output concise while preserving failures, unexpected warnings, and relevant diagnostics.
+- Coordinated releases use the highest plugin version, bump once, update every version file, publish with `-NoVersionBump`, and verify the shared-version VSIX. Follow `D:\v\fastjs\AGENTS.md`.
+- Do not commit npm caches, temporary package files, or generated VSIX files unless requested.
