@@ -502,7 +502,7 @@ class FastBridge {
       fullScreen: snapshot.fullScreen,
       editorOpenedAt: snapshot.editorOpenedAt,
       activeProject: snapshot.activeEditor?.project || null,
-      capabilities: ['state', 'getInputable', 'getContext', 'getObjectInfo', 'getSelectedText', 'getCurrentLineContent', 'navigate', 'select', 'find', 'deleteSelection', 'requestFocus', 'fullScreen', 'isFullScreen', 'listProjects', 'copyResourcePath', 'pythonPackages', 'ctrlW', 'ctrlShiftW', 'shiftHome', 'home', 'end', 'inputTop', 'shiftDown', 'shiftUp', 'moveUpIfLastLine'],
+      capabilities: ['state', 'getInputable', 'getContext', 'getObjectInfo', 'getSelectedText', 'getCurrentLineContent', 'navigate', 'select', 'find', 'deleteSelection', 'input', 'requestFocus', 'fullScreen', 'isFullScreen', 'listProjects', 'copyResourcePath', 'pythonPackages', 'ctrlW', 'ctrlShiftW', 'shiftHome', 'home', 'end', 'inputTop', 'shiftDown', 'shiftUp', 'moveUpIfLastLine'],
     }
   }
 
@@ -737,6 +737,16 @@ class FastBridge {
     return {handled: true, matched: true, deleted: true}
   }
 
+  async input(text) {
+    const editor = vscode.window.activeTextEditor
+    if (!editor) throw Object.assign(new Error('No active text editor'), {code: 'NO_EDITOR'})
+    if (typeof text !== 'string') throw Object.assign(new Error('payload.text is required'), {code: 'INVALID_MESSAGE'})
+    if (!await editor.edit(edit => editor.selections.forEach(selection => edit.replace(selection, text)))) {
+      throw new Error('Unable to insert text into the active editor')
+    }
+    return {handled: true}
+  }
+
   async currentInputable() {
     return isInputable(await this.snapshot())
   }
@@ -897,7 +907,7 @@ class FastBridge {
     }
     const type = message.type || ''
     const target = message.target || {}
-    const mutating = ['command.navigate', 'command.select', 'command.find', 'command.deleteSelection', 'command.requestFocus', 'command.fullScreen', 'command.copyResourcePath', 'command.queryPythonPackages', 'command.ctrlW', 'command.ctrlShiftW', 'command.shiftHome', 'command.home', 'command.end', 'command.inputTop', 'command.shiftDown', 'command.shiftUp', 'command.moveUpIfLastLine'].includes(type)
+    const mutating = ['command.navigate', 'command.select', 'command.find', 'command.deleteSelection', 'command.input', 'command.requestFocus', 'command.fullScreen', 'command.copyResourcePath', 'command.queryPythonPackages', 'command.ctrlW', 'command.ctrlShiftW', 'command.shiftHome', 'command.home', 'command.end', 'command.inputTop', 'command.shiftDown', 'command.shiftUp', 'command.moveUpIfLastLine'].includes(type)
     if (mutating && !target.instanceId) {
       return this.send('command.result', this.error(type, 'INVALID_MESSAGE', 'target.instanceId is required for this command'), message.id)
     }
@@ -917,6 +927,7 @@ class FastBridge {
       else if (type === 'command.navigate' || type === 'command.select') data = await this.navigate(type, message.payload || {}, target)
       else if (type === 'command.find') data = await this.find(message.payload || {}, target)
       else if (type === 'command.deleteSelection') data = await this.deleteSelection(message.payload?.expectedText)
+      else if (type === 'command.input') data = await this.input(message.payload?.text)
       else if (type === 'command.requestFocus') data = await this.requestFocus()
       else if (type === 'command.ctrlW') data = await this.ctrlW()
       else if (type === 'command.ctrlShiftW') data = await this.ctrlShiftW()
