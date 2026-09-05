@@ -1080,7 +1080,7 @@ class FastBridge {
         this.position(editor.document, payload.start, base),
         this.position(editor.document, payload.end, base),
       )
-    } else if (payload.line != null || payload.column != null) {
+    } else {
       const active = editor.selection.active
       const line = payload.line == null ? active.line
         : Math.min(Math.max(0, payload.line - base), Math.max(0, editor.document.lineCount - 1))
