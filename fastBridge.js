@@ -1023,6 +1023,16 @@ class FastBridge {
     })?.uri || null
   }
 
+  isLocalRuntimeDependency(basePath, candidate) {
+    try {
+      const runtime = JSON.parse(fs.readFileSync(path.join(basePath, 'package.json'), 'utf8')).dependencies?.['fastjs-runtime']
+      return typeof runtime === 'string' && runtime.startsWith('file:') &&
+        path.resolve(candidate).toLowerCase().startsWith((fs.realpathSync.native(path.resolve(basePath, runtime.slice(5))) + path.sep).toLowerCase())
+    } catch (error) {
+      return false
+    }
+  }
+
   resolveUri(requested, payload, target, allowActive) {
     if (!requested && allowActive && vscode.window.activeTextEditor) return vscode.window.activeTextEditor.document.uri
     if (!requested) throw new Error('payload.path is required')
@@ -1030,8 +1040,11 @@ class FastBridge {
     const candidates = this.projects().filter(item => (!target.projectId || item.projectId === target.projectId) &&
       (!requestedBase || path.resolve(item.basePath).toLowerCase() === path.resolve(requestedBase).toLowerCase()))
     const requestedUri = /^file:/i.test(requested) ? vscode.Uri.parse(requested) : null
+    const requestedPath = requestedUri?.scheme === 'file' ? path.resolve(requestedUri.fsPath) : path.isAbsolute(requested) ? path.resolve(requested) : ''
+    if(requestedPath && candidates.some(item => this.isLocalRuntimeDependency(item.basePath, requestedPath))) {
+      return vscode.Uri.file(requestedPath)
+    }
     if (allowActive && requestedUri) {
-      const requestedPath = requestedUri.scheme === 'file' ? path.resolve(requestedUri.fsPath) : ''
       const project = requestedPath && candidates.find(item => {
         const base = path.resolve(item.basePath)
         return requestedPath === base || requestedPath.toLowerCase().startsWith((base + path.sep).toLowerCase())
