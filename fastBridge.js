@@ -502,7 +502,7 @@ class FastBridge {
       fullScreen: snapshot.fullScreen,
       editorOpenedAt: snapshot.editorOpenedAt,
       activeProject: snapshot.activeEditor?.project || null,
-      capabilities: ['state', 'getInputable', 'getContext', 'getObjectInfo', 'getSelectedText', 'getCurrentLineContent', 'navigate', 'select', 'find', 'deleteSelection', 'input', 'requestFocus', 'fullScreen', 'isFullScreen', 'listProjects', 'copyResourcePath', 'pythonPackages', 'ctrlW', 'ctrlShiftW', 'shiftHome', 'home', 'end', 'inputTop', 'shiftDown', 'shiftUp', 'moveUpIfLastLine'],
+      capabilities: ['state', 'getInputable', 'getContext', 'getObjectInfo', 'getSelectedText', 'getCurrentLineContent', 'navigate', 'select', 'find', 'deleteSelection', 'input', 'requestFocus', 'fullScreen', 'isFullScreen', 'listProjects', 'copyResourcePath', 'pythonPackages', 'ctrlW', 'ctrlShiftW', 'shiftHome', 'home', 'end', 'inputTop', 'shiftDown', 'shiftUp', 'moveUpIfLastLine', 'executeIdeCommand'],
     }
   }
 
@@ -747,6 +747,18 @@ class FastBridge {
     return {handled: true}
   }
 
+  /** Executes a registered VS Code command. */
+  async executeIdeCommand(payload) {
+    const commandId = typeof payload.commandId === 'string' ? payload.commandId.trim() : ''
+    const args = payload.args === undefined || payload.args === null ? [] : payload.args
+    if (!commandId) throw Object.assign(new Error('payload.commandId must be a non-empty string'), {code: 'INVALID_COMMAND'})
+    if (!Array.isArray(args)) throw Object.assign(new Error('payload.args must be an array'), {code: 'INVALID_COMMAND_ARGS'})
+    if (!(await vscode.commands.getCommands(true)).includes(commandId)) {
+      throw Object.assign(new Error(`VS Code command not found: ${commandId}`), {code: 'COMMAND_NOT_FOUND'})
+    }
+    return vscode.commands.executeCommand(commandId, ...args)
+  }
+
   async currentInputable() {
     return isInputable(await this.snapshot())
   }
@@ -907,7 +919,7 @@ class FastBridge {
     }
     const type = message.type || ''
     const target = message.target || {}
-    const mutating = ['command.navigate', 'command.select', 'command.find', 'command.deleteSelection', 'command.input', 'command.requestFocus', 'command.fullScreen', 'command.copyResourcePath', 'command.queryPythonPackages', 'command.ctrlW', 'command.ctrlShiftW', 'command.shiftHome', 'command.home', 'command.end', 'command.inputTop', 'command.shiftDown', 'command.shiftUp', 'command.moveUpIfLastLine'].includes(type)
+    const mutating = ['command.navigate', 'command.select', 'command.find', 'command.deleteSelection', 'command.input', 'command.requestFocus', 'command.fullScreen', 'command.copyResourcePath', 'command.queryPythonPackages', 'command.ctrlW', 'command.ctrlShiftW', 'command.shiftHome', 'command.home', 'command.end', 'command.inputTop', 'command.shiftDown', 'command.shiftUp', 'command.moveUpIfLastLine', 'command.executeIdeCommand'].includes(type)
     if (mutating && !target.instanceId) {
       return this.send('command.result', this.error(type, 'INVALID_MESSAGE', 'target.instanceId is required for this command'), message.id)
     }
@@ -938,6 +950,7 @@ class FastBridge {
       else if (type === 'command.shiftDown') data = await this.shiftDirection(message.payload || {}, 1)
       else if (type === 'command.shiftUp') data = await this.shiftDirection(message.payload || {}, -1)
       else if (type === 'command.moveUpIfLastLine') data = await this.moveUpIfLastLine()
+      else if (type === 'command.executeIdeCommand') data = await this.executeIdeCommand(message.payload || {})
       else if (type === 'command.fullScreen') data = await this.fullScreen()
       else if (type === 'command.copyResourcePath') data = await this.copyResourcePath()
       else return this.send('command.result', this.error(type, 'UNKNOWN_COMMAND', `Unsupported command: ${type}`), message.id)
