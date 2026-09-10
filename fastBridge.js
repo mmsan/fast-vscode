@@ -502,7 +502,7 @@ class FastBridge {
       fullScreen: snapshot.fullScreen,
       editorOpenedAt: snapshot.editorOpenedAt,
       activeProject: snapshot.activeEditor?.project || null,
-      capabilities: ['state', 'getInputable', 'getContext', 'getObjectInfo', 'getSelectedText', 'getCurrentLineContent', 'navigate', 'select', 'find', 'deleteSelection', 'input', 'requestFocus', 'fullScreen', 'isFullScreen', 'listProjects', 'copyResourcePath', 'pythonPackages', 'ctrlW', 'ctrlShiftW', 'shiftHome', 'home', 'end', 'inputTop', 'shiftDown', 'shiftUp', 'moveUpIfLastLine', 'executeIdeCommand'],
+      capabilities: ['state', 'getInputable', 'getContext', 'getObjectInfo', 'getSelectedText', 'getCurrentLineContent', 'navigate', 'select', 'find', 'deleteSelection', 'input', 'requestFocus', 'fullScreen', 'isFullScreen', 'listProjects', 'copyResourcePath', 'pythonPackages', 'ctrlW', 'ctrlShiftW', 'shiftHome', 'home', 'end', 'direction', 'inputTop', 'shiftDown', 'shiftUp', 'moveUpIfLastLine', 'executeIdeCommand'],
     }
   }
 
@@ -919,7 +919,7 @@ class FastBridge {
     }
     const type = message.type || ''
     const target = message.target || {}
-    const mutating = ['command.navigate', 'command.select', 'command.find', 'command.deleteSelection', 'command.input', 'command.requestFocus', 'command.fullScreen', 'command.copyResourcePath', 'command.queryPythonPackages', 'command.ctrlW', 'command.ctrlShiftW', 'command.shiftHome', 'command.home', 'command.end', 'command.inputTop', 'command.shiftDown', 'command.shiftUp', 'command.moveUpIfLastLine', 'command.executeIdeCommand'].includes(type)
+    const mutating = ['command.navigate', 'command.select', 'command.find', 'command.deleteSelection', 'command.input', 'command.requestFocus', 'command.fullScreen', 'command.copyResourcePath', 'command.queryPythonPackages', 'command.ctrlW', 'command.ctrlShiftW', 'command.shiftHome', 'command.home', 'command.end', 'command.direction', 'command.inputTop', 'command.shiftDown', 'command.shiftUp', 'command.moveUpIfLastLine', 'command.executeIdeCommand'].includes(type)
     if (mutating && !target.instanceId) {
       return this.send('command.result', this.error(type, 'INVALID_MESSAGE', 'target.instanceId is required for this command'), message.id)
     }
@@ -946,6 +946,7 @@ class FastBridge {
       else if (type === 'command.shiftHome') data = await this.shiftHome()
       else if (type === 'command.home') data = await this.home()
       else if (type === 'command.end') data = await this.end()
+      else if (type === 'command.direction') data = await this.direction(message.payload || {})
       else if (type === 'command.inputTop') data = await this.inputTop(message.payload?.code)
       else if (type === 'command.shiftDown') data = await this.shiftDirection(message.payload || {}, 1)
       else if (type === 'command.shiftUp') data = await this.shiftDirection(message.payload || {}, -1)
@@ -1256,6 +1257,22 @@ class FastBridge {
       const position = new vscode.Position(selection.active.line, editor.document.lineAt(selection.active.line).text.length)
       return new vscode.Selection(position, position)
     })
+    return {handled: true}
+  }
+
+  async direction({command, count = 1}) {
+    const moves = {
+      left: {to: 'left', select: false},
+      right: {to: 'right', select: false},
+      'shift left': {to: 'left', select: true},
+      'shift right': {to: 'right', select: true},
+      'ctrl shift left': {to: 'left', select: true},
+      'ctrl shift right': {to: 'right', select: true},
+      'shift end': {to: 'wrappedLineEnd', select: true},
+    }
+    const move = moves[command]
+    if (!move) throw Object.assign(new Error('Unsupported direction command'), {code: 'INVALID_MESSAGE'})
+    await vscode.commands.executeCommand('cursorMove', {...move, by: command.includes('ctrl') ? 'word' : 'character', value: Math.max(1, Number.isInteger(count) ? count : 1)})
     return {handled: true}
   }
 

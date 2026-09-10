@@ -27,6 +27,8 @@
 
 握手和状态消息只发送实例、连接、项目、进程、能力及自动全屏所需字段；不发送安装 ID、IDE/插件版本或不支持的原生窗口信息。
 
+`command.direction` 原生执行 `left`、`right`、`shift left`、`shift right`、`ctrl shift left`、`ctrl shift right` 或 `shift end`；可选 `payload.count` 默认 `1`。
+
 ## 日志
 
 插件使用 VS Code 的 `Fast Bridge` `LogOutputChannel`，可通过命令面板的“Fast Bridge: 显示日志”查看；同时在 VS Code 为扩展提供的标准日志目录下按天保存 `fast-vscode-bridge-YYYY-MM-DD.log`。每次写日志时自动删除 3 天以前的日志，仅记录连接、重连和错误摘要，不记录源码、选区或 Token。
