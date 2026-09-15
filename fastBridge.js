@@ -1208,19 +1208,17 @@ class FastBridge {
     return { project: folder ? folder.name : '' }
   }
   async ctrlW() {
-    if (!vscode.window.activeTextEditor) {
-      throw Object.assign(new Error('No active text editor'), {code: 'NO_EDITOR'})
-    }
+    await this.requestFocus()
+    const before = vscode.window.activeTextEditor.selections
     await vscode.commands.executeCommand('editor.action.smartSelect.expand')
-    return {handled: true}
+    return {handled: vscode.window.activeTextEditor.selections.some((selection, index) => !selection.isEqual(before[index]))}
   }
 
   async ctrlShiftW() {
-    if (!vscode.window.activeTextEditor) {
-      throw Object.assign(new Error('No active text editor'), {code: 'NO_EDITOR'})
-    }
+    await this.requestFocus()
+    const before = vscode.window.activeTextEditor.selections
     await vscode.commands.executeCommand('editor.action.smartSelect.shrink')
-    return {handled: true}
+    return {handled: vscode.window.activeTextEditor.selections.some((selection, index) => !selection.isEqual(before[index]))}
   }
 
 
