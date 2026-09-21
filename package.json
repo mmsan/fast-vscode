@@ -2,7 +2,7 @@
     "name":  "scs",
     "displayName":  "fast-bridge",
     "description":  "shortcut",
-    "version":  "0.1.134",
+    "version":  "0.1.140",
     "license":  "MIT",
     "engines":  {
                     "vscode":  "^1.70.0"
@@ -54,7 +54,7 @@
                                                                                      },
                                                                  "fastBridge.port":  {
                                                                                          "type":  "number",
-                                                                                         "default":  19900,
+                                                                                         "default":  9072,
                                                                                          "minimum":  1,
                                                                                          "maximum":  65535,
                                                                                          "description":  "Fast WebSocket 服务端口。"

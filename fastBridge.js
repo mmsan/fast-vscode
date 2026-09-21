@@ -378,7 +378,7 @@ class FastBridge {
     const config = vscode.workspace.getConfiguration('fastBridge')
     return {
       host: config.get('host', '127.0.0.1'),
-      port: config.get('port', 19900),
+      port: config.get('port', 9072),
       path: config.get('path', ''),
       token: config.get('token', ''),
       autoConnect: config.get('autoConnect', true),
