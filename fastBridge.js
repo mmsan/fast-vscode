@@ -297,6 +297,7 @@ const focusContextKeys = [
   'findInputFocussed',
   'searchInputBoxFocus',
   'filesExplorerFocus',
+  'openEditorsFocus',
   'explorerViewletFocus',
   'sideBarFocus',
   'activeViewlet',
@@ -651,6 +652,7 @@ class FastBridge {
     ].some(contextKeyIsTrue)
     const explorerFocused = [
       context.filesExplorerFocus,
+      context.openEditorsFocus,
       context.explorerViewletFocus,
     ].some(contextKeyIsTrue) ||
       contextKeyIsTrue(context.sideBarFocus) && context.activeViewlet === 'workbench.view.explorer'
@@ -1334,10 +1336,11 @@ class FastBridge {
     )
     let explorerFocused = assumeFilesExplorerFocus
     if (!assumeFilesExplorerFocus) {
-      const [explorerFocus, explorerViewletFocus, sideBarFocus, activeViewlet,
+      const [explorerFocus, openEditorsFocus, explorerViewletFocus, sideBarFocus, activeViewlet,
         isFileSystemResource] =
         await Promise.all([
           this.contextKeyValue('filesExplorerFocus'),
+          this.contextKeyValue('openEditorsFocus'),
           this.contextKeyValue('explorerViewletFocus'),
           this.contextKeyValue('sideBarFocus'),
           this.contextKeyValue('activeViewlet'),
@@ -1345,9 +1348,9 @@ class FastBridge {
         ])
       const isTrue = value => value === true || value === 'true'
       const hasValue = value => value !== undefined && value !== null
-      explorerFocused = isTrue(explorerFocus) || isTrue(explorerViewletFocus) ||
+      explorerFocused = isTrue(explorerFocus) || isTrue(openEditorsFocus) || isTrue(explorerViewletFocus) ||
         isTrue(sideBarFocus) && activeViewlet === 'workbench.view.explorer'
-      const focusContextKnown = [explorerFocus, explorerViewletFocus, sideBarFocus, activeViewlet]
+      const focusContextKnown = [explorerFocus, openEditorsFocus, explorerViewletFocus, sideBarFocus, activeViewlet]
         .some(hasValue)
       if (focusContextKnown && !explorerFocused) {
         // Image and other custom editors do not have activeTextEditor, but
