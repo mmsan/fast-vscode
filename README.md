@@ -27,7 +27,7 @@
 
 握手和状态消息只发送实例、连接、项目、进程、能力及自动全屏所需字段；不发送安装 ID、IDE/插件版本或原生窗口信息。VS Code 扩展 API 不提供原生 HWND，因此无法像 IDEA 和 Visual Studio 一样建立 `HWND → project` 映射；每个 VS Code 窗口仍由独立 Bridge 实例隔离。
 
-`command.direction` 原生执行 `left`、`right`、`shift left`、`shift right`、`ctrl shift left`、`ctrl shift right` 或 `shift end`；可选 `payload.count` 默认 `1`。
+`command.direction` 原生执行 `left`、`right`、`shift left`、`shift right`、`ctrl shift left`、`ctrl shift right` 或 `shift end`；可选 `payload.count` 默认 `1`。`command.input` 输入后清除每个光标的选区并把光标放到插入文本末尾, 后续 `shift left` 从该位置扩选。
 
 ## 日志
 

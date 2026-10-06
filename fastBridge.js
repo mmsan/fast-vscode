@@ -739,6 +739,7 @@ class FastBridge {
     return {handled: true, matched: true, deleted: true}
   }
 
+  /** Replaces each selection and leaves its caret at the end of the inserted text. */
   async input(text) {
     const editor = vscode.window.activeTextEditor
     if (!editor) throw Object.assign(new Error('No active text editor'), {code: 'NO_EDITOR'})
@@ -746,6 +747,7 @@ class FastBridge {
     if (!await editor.edit(edit => editor.selections.forEach(selection => edit.replace(selection, text)))) {
       throw new Error('Unable to insert text into the active editor')
     }
+    editor.selections = editor.selections.map(selection => new vscode.Selection(selection.end, selection.end))
     return {handled: true}
   }
 
