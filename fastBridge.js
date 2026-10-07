@@ -1263,18 +1263,24 @@ class FastBridge {
   }
 
   async direction({command, count = 1}) {
+    count = Math.max(1, Number.isInteger(count) ? count : 1)
+    // cursorMove does not support a word unit; use the native word selection commands.
+    const wordCommand = command === 'ctrl shift left' ? 'cursorWordLeftSelect'
+      : command === 'ctrl shift right' ? 'cursorWordEndRightSelect' : null
+    if (wordCommand) {
+      for (let i = 0; i < count; i++) await vscode.commands.executeCommand(wordCommand)
+      return {handled: true}
+    }
     const moves = {
       left: {to: 'left', select: false},
       right: {to: 'right', select: false},
       'shift left': {to: 'left', select: true},
       'shift right': {to: 'right', select: true},
-      'ctrl shift left': {to: 'left', select: true},
-      'ctrl shift right': {to: 'right', select: true},
       'shift end': {to: 'wrappedLineEnd', select: true},
     }
     const move = moves[command]
     if (!move) throw Object.assign(new Error('Unsupported direction command'), {code: 'INVALID_MESSAGE'})
-    await vscode.commands.executeCommand('cursorMove', {...move, by: command.includes('ctrl') ? 'word' : 'character', value: Math.max(1, Number.isInteger(count) ? count : 1)})
+    await vscode.commands.executeCommand('cursorMove', {...move, by: 'character', value: count})
     return {handled: true}
   }
 

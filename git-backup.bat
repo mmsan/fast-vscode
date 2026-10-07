@@ -2,6 +2,7 @@
 setlocal EnableExtensions
 cd /d "%~dp0" || exit /b 1
 set "GIT_TERMINAL_PROMPT=0"
+set "GCM_INTERACTIVE=Never"
 
 if not exist ".git" (
   git init -b master || goto fail
@@ -17,11 +18,14 @@ if not defined BACKUP_BRANCH goto fail
 
 git remote get-url origin >nul 2>&1
 if errorlevel 1 (
-  git remote add origin "git@gitee.com:mmsan/fast-vscode.git" || goto fail
+  git remote add origin "https://github.com/mmsan/fast-vscode.git" || goto fail
 )
+rem Preserve independently staged work.
+git diff --cached --quiet || goto fail
+
 git fetch --prune --no-tags origin || goto fail
 
-git add -A || goto fail
+git add -A -- . ":(glob,exclude)**/*.vsix" ":(glob,exclude)**/.env*" ":(glob,exclude)**/*.pem" ":(glob,exclude)**/*.key" ":(glob,exclude)**/*.pfx" || goto fail
 git diff --cached --quiet
 if errorlevel 2 goto fail
 if errorlevel 1 (
