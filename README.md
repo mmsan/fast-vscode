@@ -1,54 +1,75 @@
 # fast-bridge
 
-快捷指令和 SCS 语言支持。
+让 FastGoTo 与 VS Code 配合工作: 识别你正在编辑的文件和光标位置, 并在你使用 FastGoTo 的相关功能时完成文件跳转、查找、选择和文本输入.
 
-## Fast Bridge
+这是 FastGoTo 的配套扩展. 编辑器联动需要本机运行 FastGoTo 及其编辑器连接服务; 单独安装扩展不会提供完整的 FastGoTo 功能.
 
-`command.navigate` 打开文件、移动光标并清除目标编辑器已有选区；`command.select` 保留并设置请求的选区。
+本扩展免费, FastGoTo 提供免费功能及可选的 VIP 订阅.
 
-三个插件都支持通过 `command.getSelectedText` 主动读取当前编辑器选中文本，并通过 `command.getCurrentLineContent` 读取当前代码行；Fast 端快捷调用分别为 `await f.editorBridge.getCurrentSelectedText()` 和 `await f.editorBridge.getCurrentLineContent()`。选区结果和上次主动读取不同时会立即返回；相同时插件每隔 30 毫秒复读一次，发现变化便提前返回，始终相同则在 200 毫秒时返回最新结果。没有选择时前者返回空字符串，关闭 `fastBridge.sendText` 或没有活动编辑器时返回 `null`。VS Code 的查询框等非编辑器输入框会被识别为输入焦点；由于 VS Code 扩展 API 不直接暴露内置查询框的选区文本，`ctrlC()` 会在主动读取返回 `null` 时回退到原生 Ctrl+C，从而继续获取该输入框中的选中内容。
+## 安装
 
-在 VS Code 的 Files Explorer 或“已打开的编辑器”中选中一个或多个文件/目录并按 `Ctrl+Shift+C` 时，插件会复制全部资源路径。WebSocket 命令 `command.copyResourcePath` 在 `data.paths` 返回全部绝对路径；单选时还保留兼容字段 `data.path`。
+在 VS Code 扩展面板搜索 `@id:mmsan.scs`, 安装发布者为 **mmsan** 的 **fast-bridge**.
 
-插件启动后默认连接 `ws://127.0.0.1:9072`，协议兼容 Fast Idea Bridge。它会上报当前工作区、文件、文本输入光标、选区及多光标状态，并支持服务端发起状态查询、文件导航、文本选择、查找、编辑器聚焦、编辑器全屏、资源管理器文件路径复制、`command.deleteSelection`、`command.input`、`command.home`、`command.end`、`command.inputTop`、`command.shiftDown`、`command.shiftUp`、`command.moveUpIfLastLine` 和 `command.executeIdeCommand` 命令。`command.executeIdeCommand` 通过 `vscode.commands.executeCommand(payload.commandId, ...payload.args)` 调用已注册命令，不依赖快捷键；命令不存在时返回 `COMMAND_NOT_FOUND`。`command.deleteSelection` 只有在当前选区内容与 `payload.expectedText` 完全一致时才删除；内容不一致时成功返回但不修改文档。`command.input` 在当前主光标处输入 `payload.text`，有选区时替换选区。`home` 清除选择并移动到逻辑行首；`end` 清除选择并移动到逻辑行尾；`inputTop` 会跳过文件顶部连续的整行 `//`、Python `#` 和 `/* ... */` 注释，在第一个非注释行上方插入 `payload.code` 和换行，不主动处理光标或当前选区；`shiftDown`、`shiftUp` 调用 VS Code 原生方向移动并扩展选择，可通过 `payload.count` 指定步数，默认 `1`。`home`、`end` 和 `inputTop` 按逻辑文档位置执行，不受自动换行影响；`moveUpIfLastLine` 仅在主光标位于最后一行时清除选区并上移一行，否则返回 `handled: false`。查找通常限制在当前工作区内；当前已经作为文本编辑器文档打开的临时文件可按其精确路径查找，未打开的工作区外文件仍会被拒绝。
+也可以从 [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=mmsan.scs) 安装. 已经安装的用户可以在扩展面板检查更新.
 
-状态快照中的 `payload.activeEditor.context` 表示光标最内层的通用语法上下文，`expressionContext` 提供表达式、对象类型、方法返回值、参数和成员信息；VS Code 通过 Hover 和 Completion Provider 尽力解析这些字段，方法成员同时提供 `returnType` 和兼容的 `type`。`editor.statusChanged` 只在输入能力或当前对象信息变化时发送，不再发送高频的 `editor.caretChanged` 和 `editor.documentChanged`。`command.getInputable`、`command.getContext`、`command.getObjectInfo`、`command.getSelectedText` 和 `command.getCurrentLineContent` 可主动读取当前状态，对应 Fast 端调用为 `await f.editorBridge.getCurrentInputable()`、`await f.editorBridge.getCurrentContext()`、`await f.editorBridge.getCurrentObjectInfo()`、`await f.editorBridge.getCurrentSelectedText()` 和 `await f.editorBridge.getCurrentLineContent()`。VSCode 插件不提供 `command.isEditorFocused`；Fast 端的 `await f.editorBridge.isEditorFocused()` 直接调用主进程的 Windows 原生焦点检测。`command.getContext` 返回 `singleQuote`、`doubleQuote`、`backtick`、`parentheses`、`braces` 或 `none`；没有活动编辑器时返回 `null`。`command.queryPythonPackages` 按需批量查询目标工作区解释器中的指定包。`payload.fullScreen` 表示 VS Code 是否全屏；`payload.editorOpenedAt` 是当前编辑器打开时间的 Unix 毫秒时间戳。`command.isFullScreen` 会重新查询当前窗口的全屏状态，返回 `data.fullScreen` 的 `true`、`false` 或未知的 `null`。自动全屏会在握手后查询，确认未全屏才发送 `command.fullScreen`，并在切换后再次查询确认；宿主尚未就绪时会在编辑器打开后的 30 秒内重试。`command.fullScreen` 会幂等地执行 `workbench.action.toggleFullScreen`。
-`payload.focus` 现在通过 VS Code context key 区分代码编辑器、文本输入框和其他组件；焦点轮询仅在 WebSocket 已连接时运行，并在插件销毁或断线时停止。
+如果拿到的是 `.vsix` 文件, 在扩展面板右上角的菜单中选择 **Install from VSIX...**, 然后选择安装包. 按 VS Code 提示重新加载窗口.
 
-在 VS Code 的 Files Explorer（文件资源管理器）或“已打开的编辑器”中选中一个文件或目录并按 `Ctrl+Shift+C` 时，会复制该资源的路径；焦点不在这两个列表时，不匹配这条快捷键，继续执行 Fast 原有的 Ctrl+Shift+C 逻辑。
+## 开始使用
 
-可在 VS Code 设置中搜索 `Fast Bridge` 修改地址、端口、路径和 Token。关闭 `fastBridge.sendText` 后，不再发送选中文本及输入光标附近的文本，但仍发送文件、行列和选区范围等结构信息。
+1. 启动 FastGoTo, 确保其编辑器连接服务已运行.
+2. 在 VS Code 中打开要编辑的文件或项目.
+3. 扩展会自动连接本机服务, 默认地址为 `ws://127.0.0.1:9072`.
+4. 回到 FastGoTo 使用需要编辑器配合的功能, 例如跳转到文件、查找文字或向当前编辑位置输入内容.
 
-命令面板提供：
+通常无需手动配置. 如果连接没有建立, 打开命令面板, 执行 **Fast Bridge: 显示日志**, 查看连接状态和错误信息.
 
-- `Fast Bridge: 重新连接`
-- `Fast Bridge: 显示日志`
-- `Fast Bridge: Copy Selected Explorer Resource Path`
+## 你可以做什么
 
-握手和状态消息只发送实例、连接、项目、进程、能力及自动全屏所需字段；不发送安装 ID、IDE/插件版本或原生窗口信息。VS Code 扩展 API 不提供原生 HWND，因此无法像 IDEA 和 Visual Studio 一样建立 `HWND → project` 映射；每个 VS Code 窗口仍由独立 Bridge 实例隔离。
+- 让 FastGoTo 获取当前文件、工作区、光标和选区位置, 减少手动切换和复制路径.
+- 从 FastGoTo 打开文件并跳转到指定位置, 查找或选择文本.
+- 配合 FastGoTo 在当前编辑器输入、替换选中文本或移动光标.
+- 在资源管理器或“已打开的编辑器”列表中选中文件或文件夹, 按 `Ctrl+Shift+C` 复制路径. 支持多选.
 
-`command.direction` 原生执行 `left`、`right`、`shift left`、`shift right`、`ctrl shift left`、`ctrl shift right` 或 `shift end`；可选 `payload.count` 默认 `1`。`command.input` 输入后清除每个光标的选区并把光标放到插入文本末尾, 后续 `shift left` 从该位置扩选。
+扩展也保留了 SCS 文件的语法高亮和格式整理功能. 在 SCS 编辑器中可使用 `Alt+Shift+F`; 命令面板中的对应命令名为 **Beautify SQL**.
 
-## 日志
+## 连接与隐私设置
 
-插件使用 VS Code 的 `Fast Bridge` `LogOutputChannel`，可通过命令面板的“Fast Bridge: 显示日志”查看；同时在 VS Code 为扩展提供的标准日志目录下按天保存 `fast-vscode-bridge-YYYY-MM-DD.log`。每次写日志时自动删除 3 天以前的日志，仅记录连接、重连和错误摘要，不记录源码、选区或 Token。
+打开 VS Code 设置, 搜索 `Fast Bridge`.
 
-## 本地发布
+| 设置 | 默认值 | 什么时候需要修改 |
+| --- | --- | --- |
+| `fastBridge.host` | `127.0.0.1` | FastGoTo 服务使用了其他地址时 |
+| `fastBridge.port` | `9072` | 服务端口发生变化时 |
+| `fastBridge.path` | 空 | 服务要求指定连接路径时 |
+| `fastBridge.token` | 空 | 服务启用了 Token 验证时, 填入相同的 Token |
+| `fastBridge.autoConnect` | 开启 | 关闭后停止自动连接; 需要联动时重新开启 |
+| `fastBridge.sendText` | 开启 | 不希望共享选中文本或光标附近的内容时关闭 |
+| `fastBridge.contextCharacters` | `200` | 调整光标前后各自最多共享的字符数, 范围为 0–10000 |
 
-双击 `publish-local-plugin.cmd`，或在 PowerShell 中运行：
+默认连接到本机. 开启文本共享时, 扩展会向配置的服务发送选中文本和光标附近的内容, 并允许 FastGoTo 按需读取当前行或选中文本. 关闭文本共享后, 文件路径、光标位置和选区范围等结构信息仍会用于联动, 但相关文本读取功能不可用.
 
-```powershell
-.\publish-local-plugin.cmd
-```
+连接的服务也能请求编辑器执行操作, 包括修改文本. 只连接你信任的服务, 不要将 Token 填入不可信的服务配置.
 
-脚本会自动递增补丁版本、安装依赖、生成 `scs-<版本>.vsix`，然后覆盖安装到当前 VS Code。安装完成后，在命令面板执行 `Developer: Reload Window` 加载新版本。
+## 常见问题
 
-只打包、不安装：
+**安装后没有连接?**
 
-```powershell
-.\publish-local-plugin.cmd -NoVersionBump -SkipInstall
-```
+先确认 FastGoTo 的编辑器连接服务已经启动, 再检查地址、端口和 Token 是否一致, 以及 `fastBridge.autoConnect` 是否开启. 然后在命令面板执行 **Fast Bridge: 重新连接**.
 
+**连接成功, 但读取不到选中文字?**
 
-# LICENSE
-This software is released under the terms of the MIT license.
+确认文本选在代码编辑器内, 并且 `fastBridge.sendText` 已开启. 搜索框等输入框不等同于代码编辑器, 扩展无法直接读取所有这类控件的选区.
+
+**复制路径快捷键没有生效?**
+
+先在资源管理器或“已打开的编辑器”列表选中目标资源. `Ctrl+Shift+C` 的路径复制只在这些列表获得焦点时生效.
+
+**在哪里查看日志?**
+
+执行 **Fast Bridge: 显示日志**, 打开 `Fast Bridge` 输出面板. 扩展保留最近 3 天的按日日志, 记录连接和错误摘要, 不记录源码、选区内容或 Token.
+
+## 许可证
+
+本扩展采用 MIT 许可证, 完整条款见安装包中的 LICENSE.txt.
+
+源码与问题反馈: [mmsan/fast-vscode](https://github.com/mmsan/fast-vscode).

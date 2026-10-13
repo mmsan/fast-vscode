@@ -2,7 +2,7 @@
     "name":  "scs",
     "displayName":  "fast-bridge",
     "description":  "shortcut",
-    "version":  "0.1.144",
+    "version":  "0.1.146",
     "license":  "MIT",
     "engines":  {
                     "vscode":  "^1.70.0"
@@ -23,7 +23,8 @@
                          ],
     "main":  "./extension",
     "repository":  {
-
+                       "type":  "git",
+                       "url":  "https://github.com/mmsan/fast-vscode.git"
                    },
     "contributes":  {
                         "commands":  [
