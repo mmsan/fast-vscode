@@ -1239,6 +1239,8 @@ class FastBridge {
       handled = true
       return new vscode.Selection(selection.active, new vscode.Position(selection.active.line, 0))
     })
+    // This acknowledged selection is current even when it matches the previous query.
+    if (handled) this.lastSelectedText = null
     return {handled}
   }
 
