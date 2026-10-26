@@ -2,7 +2,7 @@
     "name":  "scs",
     "displayName":  "fast-bridge",
     "description":  "shortcut",
-    "version":  "0.1.147",
+    "version":  "0.1.149",
     "license":  "MIT",
     "engines":  {
                     "vscode":  "^1.70.0"
@@ -51,14 +51,14 @@
                                                                  "fastBridge.host":  {
                                                                                          "type":  "string",
                                                                                          "default":  "127.0.0.1",
-                                                                                         "description":  "Fast WebSocket 服务地址。"
+                                                                                         "description":  "本机 Fast 服务地址, 仅支持 loopback。"
                                                                                      },
                                                                  "fastBridge.port":  {
                                                                                          "type":  "number",
                                                                                          "default":  9072,
                                                                                          "minimum":  1,
                                                                                          "maximum":  65535,
-                                                                                         "description":  "Fast WebSocket 服务端口。"
+                                                                                         "description":  "兼容保留; 实际端口由经过认证的本机 Host 提供。"
                                                                                      },
                                                                  "fastBridge.path":  {
                                                                                          "type":  "string",
@@ -68,7 +68,7 @@
                                                                  "fastBridge.token":  {
                                                                                           "type":  "string",
                                                                                           "default":  "",
-                                                                                          "description":  "可选 Bearer Token。"
+                                                                                          "description":  "兼容保留, 不再用于认证; 本机 Host 自动签发短时凭据。"
                                                                                       },
                                                                  "fastBridge.autoConnect":  {
                                                                                                 "type":  "boolean",

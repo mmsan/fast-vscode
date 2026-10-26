@@ -12,6 +12,233 @@ const pythonPackageName = /^[A-Za-z_][A-Za-z0-9_.-]*$/
 const slowReconnectAfterMs = 5 * 60 * 1000
 const slowReconnectDelayMs = 6000
 const connectionLogIntervalMs = 60 * 1000
+
+/** Obtain a fresh bootstrap through a verified local Host pipe, without storing credentials. */
+async function localBridgeBootstrap() {
+  if(process.platform !== 'win32' || vscode.env.remoteName) throw new Error('Local Windows bridge required')
+  const clientNonce = crypto.randomBytes(32).toString('hex')
+  const powershell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+  const script = String.raw`
+$ErrorActionPreference = 'Stop'
+$pipe = $null
+$clock = [Diagnostics.Stopwatch]::StartNew()
+try {
+  Add-Type -TypeDefinition @"
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+public static class FastBridgeNative {
+  [DllImport("kernel32.dll", SetLastError=true)] public static extern bool GetNamedPipeServerProcessId(SafePipeHandle pipe, out uint pid);
+  [DllImport("kernel32.dll", SetLastError=true)] public static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
+  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] public static extern bool QueryFullProcessImageName(IntPtr process, uint flags, StringBuilder name, ref uint length);
+  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] public static extern uint GetFinalPathNameByHandle(SafeFileHandle file, StringBuilder name, uint length, uint flags);
+  [DllImport("kernel32.dll")] public static extern bool CloseHandle(IntPtr handle);
+}
+"@ | Out-Null
+  # Return the remaining deadline for each bounded pipe operation.
+  function Remaining {
+    $left = 5000 - [int]$clock.ElapsedMilliseconds
+    if($left -le 0) { throw 'Deadline' }
+    return $left
+  }
+  # Resolve a file through its open handle before comparing installation identity.
+  function Canonical([string]$filename) {
+    if($filename -notmatch '^[A-Za-z]:\\' -or $filename.Length -gt 4096) { throw 'Path' }
+    $file = [IO.File]::Open($filename, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]7)
+    try {
+      $name = [Text.StringBuilder]::new(32768)
+      $length = [FastBridgeNative]::GetFinalPathNameByHandle($file.SafeFileHandle, $name, 32768, 0)
+      if($length -eq 0 -or $length -ge 32768) { throw 'Path' }
+      $value = $name.ToString()
+      if($value.StartsWith('\\?\')) { $value = $value.Substring(4) }
+      return $value
+    } finally { $file.Dispose() }
+  }
+  $descriptorPath = [IO.Path]::Combine([Environment]::GetFolderPath('LocalApplicationData'), 'FastGoTo\BrowserBridge\Native\bridge-host-v2.json')
+  $walk = $descriptorPath
+  while($walk) {
+    if(([IO.File]::GetAttributes($walk) -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Descriptor link' }
+    $walk = [IO.Path]::GetDirectoryName($walk)
+  }
+  $file = [IO.File]::Open($descriptorPath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+  try {
+    if($file.Length -lt 2 -or $file.Length -gt 16384) { throw 'Descriptor size' }
+    $bytes = [byte[]]::new([int]$file.Length)
+    $offset = 0
+    while($offset -lt $bytes.Length) {
+      $read = $file.Read($bytes, $offset, $bytes.Length - $offset)
+      if($read -le 0) { throw 'Descriptor truncated' }
+      $offset += $read
+    }
+    $descriptor = [Text.UTF8Encoding]::new($false, $true).GetString($bytes) | ConvertFrom-Json
+  } finally { $file.Dispose() }
+  if(@($descriptor.PSObject.Properties).Count -ne 4 -or $descriptor.version -isnot [int] -or $descriptor.version -ne 2 -or
+    $descriptor.pipe -notmatch '^FastGoTo\.Bridge\.v2\.S-1-[0-9-]+\.[0-9]+$' -or
+    $descriptor.pid -isnot [int] -or $descriptor.pid -le 0 -or
+    [IO.Path]::GetFileName($descriptor.executable) -ine 'FastGoTo.exe') { throw 'Descriptor' }
+  $expectedImage = Canonical $descriptor.executable
+  if(-not [string]::Equals($expectedImage, $descriptor.executable, [StringComparison]::OrdinalIgnoreCase)) { throw 'Descriptor canonical path' }
+  $pipe = [IO.Pipes.NamedPipeClientStream]::new('.', $descriptor.pipe, [IO.Pipes.PipeDirection]::InOut, [IO.Pipes.PipeOptions]::Asynchronous)
+  $pipe.Connect([Math]::Min(1000, (Remaining)))
+  $serverPid = [uint32]0
+  if(-not [FastBridgeNative]::GetNamedPipeServerProcessId($pipe.SafePipeHandle, [ref]$serverPid) -or $serverPid -ne $descriptor.pid) { throw 'Server identity' }
+  $processHandle = [FastBridgeNative]::OpenProcess(0x1000, $false, $serverPid)
+  if($processHandle -eq [IntPtr]::Zero) { throw 'Server process' }
+  try {
+    $image = [Text.StringBuilder]::new(32768)
+    $length = [uint32]32768
+    if(-not [FastBridgeNative]::QueryFullProcessImageName($processHandle, 0, $image, [ref]$length) -or
+      -not [string]::Equals((Canonical $image.ToString()), $expectedImage, [StringComparison]::OrdinalIgnoreCase)) { throw 'Server image' }
+  } finally { [void][FastBridgeNative]::CloseHandle($processHandle) }
+  $request = [Text.Encoding]::UTF8.GetBytes('{"version":2,"type":"connect","client":"vscode","clientNonce":"__CLIENT_NONCE__"}' + [char]10)
+  $write = $pipe.WriteAsync($request, 0, $request.Length)
+  if(-not $write.Wait((Remaining))) { throw 'Write timeout' }
+  [void]$write.GetAwaiter().GetResult()
+  $response = [Collections.Generic.List[byte]]::new()
+  $one = [byte[]]::new(1)
+  while($response.Count -lt 16384) {
+    $read = $pipe.ReadAsync($one, 0, 1)
+    if(-not $read.Wait((Remaining)) -or $read.GetAwaiter().GetResult() -ne 1) { throw 'Read timeout' }
+    if($one[0] -eq 10) { break }
+    $response.Add($one[0])
+  }
+  if($response.Count -ge 16384 -or $one[0] -ne 10) { throw 'Reply size' }
+  [Console]::Out.Write([Text.UTF8Encoding]::new($false, $true).GetString($response.ToArray()))
+} catch {
+  [Console]::Error.Write('Local bridge bootstrap unavailable')
+  exit 1
+} finally {
+  if($pipe) { $pipe.Dispose() }
+}
+`.replace('__CLIENT_NONCE__', clientNonce)
+  let response
+  try {
+    const {stdout} = await execFileAsync(powershell, ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
+      {windowsHide: true, timeout: 6500, maxBuffer: 16384, encoding: 'utf8'})
+    response = JSON.parse(stdout)
+  } catch {
+    throw new Error('Local bridge bootstrap unavailable')
+  }
+  const fields = ['version', 'ok', 'client', 'clientNonce', 'peerPid', 'ticket', 'key', 'expires', 'port']
+  if(!response || Object.keys(response).length !== fields.length || !fields.every(field => Object.hasOwn(response, field)) ||
+    response.version !== 2 || response.ok !== true || response.client !== 'vscode' || response.clientNonce !== clientNonce ||
+    response.peerPid !== process.pid || !Number.isSafeInteger(response.expires) || response.expires <= Date.now() ||
+    response.expires > Date.now() + 30000 || !Number.isInteger(response.port) || response.port < 1 || response.port > 65535 ||
+    typeof response.key !== 'string' || response.key.length !== 64 || !/^[0-9a-f]{64}$/.test(response.key) ||
+    typeof response.ticket !== 'string' || response.ticket.length !== 64 || !/^[0-9a-f]{64}$/.test(response.ticket)) throw new Error('Invalid local bridge bootstrap')
+  return response
+}
+
+/** Authenticate the local WebSocket and preserve its normal ping/pong transport. */
+function authenticatedBridgeSession(socket, bootstrap, onReady) {
+  const limit = 2 * 1024 * 1024
+  const maxFrame = Math.ceil((limit + 16) / 3) * 4 + 128
+  const decoder = new TextDecoder('utf-8', {fatal: true})
+  const {client, peerPid, ticket, expires, clientNonce} = bootstrap
+  const bootstrapKey = Buffer.from(bootstrap.key, 'hex')
+  bootstrap.key = ''
+  const rawSend = socket.send.bind(socket)
+  const deadline = Date.now() + 5000
+  let phase = 0, sent = 0, received = 0, receiveKey, sendKey
+  const timer = setTimeout(fail, 5000)
+  /** Erase session keys after failure, reconnect or disposal. */
+  function dispose() {
+    phase = -1
+    clearTimeout(timer)
+    bootstrapKey.fill(0)
+    receiveKey?.fill(0)
+    sendKey?.fill(0)
+  }
+  /** Close without allowing exception details to expose protocol material. */
+  function fail() {
+    dispose()
+    socket.close(1008, 'Local bridge authentication failed')
+  }
+  /** Bind traffic counters to a unique directional GCM nonce. */
+  function iv(sequence) {
+    const result = Buffer.alloc(12)
+    result.writeBigUInt64BE(BigInt(sequence), 4)
+    return result
+  }
+  /** Bind encrypted frames to their direction and exact sequence. */
+  function aad(direction, sequence) {
+    return Buffer.from(JSON.stringify(['fast-local-bridge-v2', direction, sequence]), 'utf8')
+  }
+  /** Bind each proof/key to the admitted peer and both nonce challenges. */
+  function derive(purpose, serverNonce) {
+    return crypto.createHmac('sha256', bootstrapKey).update(JSON.stringify([purpose, client, peerPid, ticket, expires, clientNonce, serverNonce])).digest()
+  }
+  socket.send = function(data, options, callback) {
+    if(phase !== 2 || sent >= Number.MAX_SAFE_INTEGER || socket.bufferedAmount > maxFrame * 2) {
+      fail()
+      throw new Error('Local bridge is not ready')
+    }
+    const plaintext = Buffer.isBuffer(data) ? data : Buffer.from(data)
+    if(plaintext.length > limit) {
+      fail()
+      throw new Error('Bridge message too large')
+    }
+    const sequence = ++sent
+    const cipher = crypto.createCipheriv('aes-256-gcm', sendKey, iv(sequence))
+    cipher.setAAD(aad('clientToServer', sequence))
+    const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final(), cipher.getAuthTag()]).toString('base64')
+    return rawSend(JSON.stringify({type: 'bridgeFrame', sequence, ciphertext}), options, callback)
+  }
+  socket.on('open', () => {
+    if(phase < 0 || Date.now() >= expires) return fail()
+    rawSend(JSON.stringify({type: 'bridgeHello', protocol: 2, client, peerPid, ticket, expires, clientNonce}))
+  })
+  return {
+    dispose,
+    /** Release application JSON only after the encrypted ready message has arrived. */
+    accept(raw) {
+      try {
+        if(phase < 0 || phase !== 2 && Date.now() >= deadline || Buffer.byteLength(raw) > (phase === 0 ? 16 * 1024 : maxFrame)) throw new Error()
+        const message = JSON.parse(typeof raw === 'string' ? raw : decoder.decode(raw))
+        if(!message || typeof message !== 'object' || Array.isArray(message)) throw new Error()
+        if(phase === 0) {
+          if(Date.now() >= expires || message.type !== 'bridgeChallenge' || message.protocol !== 2 ||
+            typeof message.serverNonce !== 'string' || message.serverNonce.length !== 64 || !/^[0-9a-f]{64}$/.test(message.serverNonce) ||
+            typeof message.proof !== 'string' || message.proof.length !== 64 || !/^[0-9a-f]{64}$/.test(message.proof)) throw new Error()
+          const expected = derive('server', message.serverNonce)
+          if(!crypto.timingSafeEqual(expected, Buffer.from(message.proof, 'hex'))) throw new Error()
+          receiveKey = derive('serverToClient', message.serverNonce)
+          sendKey = derive('clientToServer', message.serverNonce)
+          const proof = derive('client', message.serverNonce).toString('hex')
+          bootstrapKey.fill(0)
+          phase = 1
+          rawSend(JSON.stringify({type: 'bridgeProof', proof}))
+          return null
+        }
+        if(message.type !== 'bridgeFrame' || !Number.isSafeInteger(message.sequence) || message.sequence !== received + 1 ||
+          typeof message.ciphertext !== 'string' || message.ciphertext.length > Math.ceil((limit + 16) / 3) * 4) throw new Error()
+        const encrypted = Buffer.from(message.ciphertext, 'base64')
+        if(encrypted.length < 16 || encrypted.length > limit + 16 || encrypted.toString('base64') !== message.ciphertext) throw new Error()
+        const decipher = crypto.createDecipheriv('aes-256-gcm', receiveKey, iv(message.sequence))
+        decipher.setAAD(aad('serverToClient', message.sequence))
+        decipher.setAuthTag(encrypted.subarray(-16))
+        const plaintext = Buffer.concat([decipher.update(encrypted.subarray(0, -16)), decipher.final()])
+        const result = JSON.parse(decoder.decode(plaintext))
+        if(!result || typeof result !== 'object' || Array.isArray(result)) throw new Error()
+        received = message.sequence
+        if(phase === 1) {
+          if(result.type !== 'bridgeReady') throw new Error()
+          phase = 2
+          clearTimeout(timer)
+          Promise.resolve(onReady()).catch(fail)
+          return null
+        }
+        if(['bridgeHello', 'bridgeChallenge', 'bridgeProof', 'bridgeReady', 'bridgeFrame'].includes(result.type)) throw new Error()
+        return result
+      } catch {
+        fail()
+        return null
+      }
+    },
+  }
+}
+
 const maxLogFileBytes = 5 * 1024 * 1024
 const logBackupCount = 2
 const compactLogText = value => {
@@ -408,24 +635,31 @@ class FastBridge {
     if (!this.disposed && this.settings().autoConnect) this.connect()
   }
 
-  connect() {
+  /** Reconnect using a fresh Host admission; saved endpoints never bypass local authentication. */
+  async connect() {
     const generation = this.generation
     const settings = this.settings()
-    const socketPath = settings.path ? (settings.path.startsWith('/') ? settings.path : `/${settings.path}`) : ''
-    const headers = { 'X-Idea-Bridge-Version': '1', 'X-Fast-Bridge-Client': 'vscode' }
-    if (settings.token.trim()) headers.Authorization = `Bearer ${settings.token.trim()}`
-    let socket
+    let bootstrap, socket
     try {
-      socket = new WebSocket(`ws://${settings.host.trim()}:${settings.port}${socketPath}`, { headers, handshakeTimeout: 1000 })
-    } catch (error) {
-      this.log(`connection configuration failed: ${error.message}`, 'error')
+      if(!['127.0.0.1', 'localhost'].includes(settings.host.trim())) throw new Error('Local Windows bridge required')
+      const socketPath = settings.path ? (settings.path.startsWith('/') ? settings.path : '/' + settings.path) : ''
+      if(!/^(\/[A-Za-z0-9._/-]*)?$/.test(socketPath) || socketPath === '/ws1') throw new Error('Invalid local editor path')
+      bootstrap = await localBridgeBootstrap()
+      if(this.disposed || generation !== this.generation || !this.settings().autoConnect) return
+      socket = new WebSocket('ws://127.0.0.1:' + bootstrap.port + socketPath,
+        {handshakeTimeout: 1000, maxPayload: Math.ceil((2 * 1024 * 1024 + 16) / 3) * 4 + 128})
+    } catch {
+      this.recordConnectionFailure(new Error('Authenticated local bridge unavailable'))
+      this.scheduleReconnect(generation)
       return
     }
+    this.socket = socket
     let opened = false
-    socket.on('open', async () => {
-      if (generation !== this.generation || this.disposed) return socket.close()
-      this.socket = socket
+    const transport = authenticatedBridgeSession(socket, bootstrap, async () => {
+      if(generation !== this.generation || this.disposed || this.socket !== socket) return socket.close()
       this.connectionId = uuid()
+      const identity = await this.identity()
+      if(generation !== this.generation || this.disposed || this.socket !== socket || socket.readyState !== WebSocket.OPEN) return socket.close()
       this.reconnectAttempt = 0
       this.reconnectStartedAt = 0
       this.slowReconnectLogged = false
@@ -433,42 +667,52 @@ class FastBridge {
       opened = true
       const failures = this.connectionFailures
       this.connectionFailures = 0
-      this.log(`connected${failures > 0 ? `; recoveredAfterFailures=${failures}` : ''}`)
-      const identity = await this.identity()
-      if (!this.startupFullscreenHandshakeSent) {
+      this.log('connected' + (failures > 0 ? '; recoveredAfterFailures=' + failures : ''))
+      if(!this.startupFullscreenHandshakeSent) {
         this.startupFullscreenHandshakeSent = true
         identity.startupFullScreenUntil = Date.now() + 8000
       }
+      socket.bridgeReady = true
       this.send('bridge.hello', identity)
       this.schedule('editor.state', 0)
       this.scheduleStatus(0)
       this.startFocusPolling()
     })
+    bootstrap = undefined
     socket.on('message', data => {
-      if (data.length > 1024 * 1024) return socket.close(1009, 'message too large')
-      this.handle(data.toString()).catch(error => this.log(error.stack || error.message, 'error'))
+      const message = transport.accept(data)
+      if(message && socket.bridgeReady && generation === this.generation && this.socket === socket) {
+        this.handle(JSON.stringify(message)).catch(error => this.log(error.stack || error.message, 'error'))
+      }
     })
     socket.on('error', error => this.recordConnectionFailure(error))
-    socket.on('close', (code, reason) => {
-      if (this.socket === socket) {
+    socket.on('close', code => {
+      transport.dispose()
+      socket.bridgeReady = false
+      if(this.socket === socket) {
         this.socket = null
         this.stopFocusPolling()
       }
-      if (this.disposed || generation !== this.generation || !this.settings().autoConnect) return
-      if (opened) this.logConnectionEvent('closed', `connection closed; code=${code}; reason=${reason?.toString() || ''}`)
-      const delays = [200, 500, 1000, 2000]
-      const attempt = this.reconnectAttempt++
-      if (!this.reconnectStartedAt) this.reconnectStartedAt = Date.now()
-      const retryingForMs = Date.now() - this.reconnectStartedAt
-      const delay = retryingForMs >= slowReconnectAfterMs
-        ? slowReconnectDelayMs
-        : delays[Math.min(attempt, delays.length - 1)]
-      if (delay === slowReconnectDelayMs && !this.slowReconnectLogged) {
-        this.slowReconnectLogged = true
-        this.log(`connection remains unavailable for ${Math.floor(retryingForMs / 1000)}s; retry delay increased to ${slowReconnectDelayMs}ms`, 'warn')
-      }
-      setTimeout(() => generation === this.generation && this.connect(), delay)
+      if(opened) this.logConnectionEvent('closed', 'connection closed; code=' + code)
+      this.scheduleReconnect(generation)
     })
+  }
+
+  /** Preserve bounded reconnect backoff after bootstrap and transport failures. */
+  scheduleReconnect(generation) {
+    if(this.disposed || generation !== this.generation || !this.settings().autoConnect) return
+    const delays = [200, 500, 1000, 2000]
+    const attempt = this.reconnectAttempt++
+    if(!this.reconnectStartedAt) this.reconnectStartedAt = Date.now()
+    const retryingForMs = Date.now() - this.reconnectStartedAt
+    const delay = retryingForMs >= slowReconnectAfterMs
+      ? slowReconnectDelayMs
+      : delays[Math.min(attempt, delays.length - 1)]
+    if(delay === slowReconnectDelayMs && !this.slowReconnectLogged) {
+      this.slowReconnectLogged = true
+      this.log('connection remains unavailable for ' + Math.floor(retryingForMs / 1000) + 's; retry delay increased to ' + slowReconnectDelayMs + 'ms', 'warn')
+    }
+    setTimeout(() => generation === this.generation && this.connect(), delay)
   }
 
   recordConnectionFailure(error) {
@@ -508,7 +752,7 @@ class FastBridge {
   }
 
   send(type, payload, replyTo) {
-    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return
+    if (!this.socket?.bridgeReady || this.socket.readyState !== WebSocket.OPEN) return
     const source = {
       instanceId: this.instanceId,
       connectionId: this.connectionId,
@@ -580,7 +824,7 @@ class FastBridge {
   startFocusPolling() {
     this.stopFocusPolling()
     this.focusPoll = setInterval(() => {
-      if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return
+      if (!this.socket?.bridgeReady || this.socket.readyState !== WebSocket.OPEN) return
       this.publishStatus().catch(error => {
         this.log(`读取当前编辑器焦点失败：${error.message}`, 'warn')
       })
