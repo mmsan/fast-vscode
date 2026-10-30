@@ -548,7 +548,6 @@ class FastBridge {
     this.reconnectAttempt = 0
     this.connectionFailures = 0
     this.reconnectStartedAt = 0
-    this.slowReconnectLogged = false
     this.connectionLogStates = new Map()
     this.startupFullscreenHandshakeSent = false
     this.editorOpenedKey = null
@@ -627,7 +626,6 @@ class FastBridge {
     this.generation++
     this.reconnectAttempt = 0
     this.reconnectStartedAt = 0
-    this.slowReconnectLogged = false
     this.log('settings changed; reconnecting')
     this.stopFocusPolling()
     if (this.socket) this.socket.close(1000, 'settings changed')
@@ -648,8 +646,9 @@ class FastBridge {
       if(this.disposed || generation !== this.generation || !this.settings().autoConnect) return
       socket = new WebSocket('ws://127.0.0.1:' + bootstrap.port + socketPath,
         {handshakeTimeout: 1000, maxPayload: Math.ceil((2 * 1024 * 1024 + 16) / 3) * 4 + 128})
-    } catch {
-      this.recordConnectionFailure(new Error('Authenticated local bridge unavailable'))
+    } catch (error) {
+      if(this.disposed || generation !== this.generation || !this.settings().autoConnect) return
+      this.recordConnectionFailure(error)
       this.scheduleReconnect(generation)
       return
     }
@@ -662,7 +661,6 @@ class FastBridge {
       if(generation !== this.generation || this.disposed || this.socket !== socket || socket.readyState !== WebSocket.OPEN) return socket.close()
       this.reconnectAttempt = 0
       this.reconnectStartedAt = 0
-      this.slowReconnectLogged = false
       this.lastStatusSignature = null
       opened = true
       const failures = this.connectionFailures
@@ -685,7 +683,9 @@ class FastBridge {
         this.handle(JSON.stringify(message)).catch(error => this.log(error.stack || error.message, 'error'))
       }
     })
-    socket.on('error', error => this.recordConnectionFailure(error))
+    socket.on('error', error => {
+      if(!this.disposed && generation === this.generation && this.socket === socket) this.recordConnectionFailure(error)
+    })
     socket.on('close', code => {
       transport.dispose()
       socket.bridgeReady = false
@@ -708,16 +708,14 @@ class FastBridge {
     const delay = retryingForMs >= slowReconnectAfterMs
       ? slowReconnectDelayMs
       : delays[Math.min(attempt, delays.length - 1)]
-    if(delay === slowReconnectDelayMs && !this.slowReconnectLogged) {
-      this.slowReconnectLogged = true
-      this.log('connection remains unavailable for ' + Math.floor(retryingForMs / 1000) + 's; retry delay increased to ' + slowReconnectDelayMs + 'ms', 'warn')
-    }
     setTimeout(() => generation === this.generation && this.connect(), delay)
   }
 
   recordConnectionFailure(error) {
     const count = ++this.connectionFailures
-    this.logConnectionEvent('failure', `connection failed; attempt=${count}; ${error?.message || error}`, 'warn')
+    const message = `connection failed; attempt=${count}; ${error?.message || error}`
+    if(error?.message === 'Invalid local bridge bootstrap') this.logConnectionEvent('invalid-bootstrap', message, 'warn')
+    else if(count === 1) this.log(message, 'warn')
   }
 
   logConnectionEvent(kind, text, level = 'warn') {
