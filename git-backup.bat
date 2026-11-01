@@ -20,9 +20,6 @@ git remote get-url origin >nul 2>&1
 if errorlevel 1 (
   git remote add origin "https://github.com/mmsan/fast-vscode.git" || goto fail
 )
-rem Preserve independently staged work.
-git diff --cached --quiet || goto fail
-
 git fetch --prune --no-tags origin || goto fail
 
 git add -A -- . ":(glob,exclude)**/*.vsix" ":(glob,exclude)**/.env*" ":(glob,exclude)**/*.pem" ":(glob,exclude)**/*.key" ":(glob,exclude)**/*.pfx" || goto fail
