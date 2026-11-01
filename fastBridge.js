@@ -61,7 +61,7 @@ public static class FastBridgeNative {
     if(([IO.File]::GetAttributes($walk) -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Descriptor link' }
     $walk = [IO.Path]::GetDirectoryName($walk)
   }
-  $file = [IO.File]::Open($descriptorPath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+  $file = [IO.File]::Open($descriptorPath, [IO.FileMode]::Open, [IO.FileAccess]::Read, ([IO.FileShare]::Read -bor [IO.FileShare]::Delete))
   try {
     if($file.Length -lt 2 -or $file.Length -gt 16384) { throw 'Descriptor size' }
     $bytes = [byte[]]::new([int]$file.Length)
